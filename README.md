@@ -109,12 +109,24 @@ exactly "Electric Guitar (clean)". An exact patch hit outweighs any name
 evidence; library category and keyword overlap resolve the rest. Parts with no
 candidate above `--min-score` are skipped rather than guessed at.
 
-**Rhythm vs lead.** Inferred from content, with track names as corroboration
-only. The primary axis is *coverage* — what fraction of the piece the part
-sounds in — because accompaniment runs throughout while a lead appears in
-bursts. Chords and polyphony argue only *for* accompaniment: their absence
-means nothing, since bass lines, riffs and arpeggiated backing are all
-monophonic accompaniment. Percussion is always rhythm.
+**Rhythm vs lead — guitars only.** Role is annotated for programs 24–31 and left
+unset for everything else; bass, drums, keys and rendered vocals carry a program
+and no role. Their track names have no `:role` suffix, and the missing colon is
+the statement that the part takes no role.
+
+It is inferred from content, with track names as corroboration only. Two things
+it deliberately does *not* do:
+
+- **Sustain is not polyphony.** Simultaneity is measured at note onsets. A
+  fingerpicked line whose notes ring into one another is played one note at a
+  time; measuring sustained overlap instead scored a purely sequential guitar
+  line at 5.7 voices and pushed it to "rhythm".
+- **A guitar that changes role is not rhythm.** One that plays melody in one
+  section, chords in another and a solo in a third is marked `lead`, because
+  averaging it produces a label describing neither section. Stairway's acoustic
+  guitar (45 of 58 windows chordal) and Californication's Gretsch (32 of 63) are
+  both this case. The exception is a source track named `Rhythm Guitar` with
+  nothing contradicting it — a human who labelled it knew what it was for.
 
 **Writing SFLT state.** SFLT is a nih-plug plugin, so REAPER stores its state as
 JSON inside the RPP's base64 VST chunk:

@@ -124,15 +124,71 @@ def test_sustained_arpeggio_is_lead_not_rhythm():
     assert not role.rhythm
 
 
-def test_monophonic_bass_is_rhythm_not_lead():
-    """A bass line has no chords, but it is accompaniment: absence of chords
-    must never by itself push a part towards 'lead'."""
+@pytest.mark.parametrize(
+    "program,is_drum",
+    [(33, False), (0, False), (18, False), (66, False), (48, False), (0, True)],
+)
+def test_only_guitars_take_a_role(program, is_drum):
+    """Role is a guitar-only annotation: bass, drums, keys and the rest carry a
+    program and nothing else."""
     ppq = 480
     notes = [Note(i * ppq, i * ppq + ppq, 40, 100, 0) for i in range(200)]
-    segment = Segment(program=33, is_drum=False, notes=notes)
+    segment = Segment(program=program, is_drum=is_drum, notes=notes)
 
-    role = classify_role(segment, ppq, song_ticks=200 * ppq, source_name="Bass", vocal=False)
+    assert classify_role(segment, ppq, 200 * ppq, "Bass", vocal=False) is None
+
+
+@pytest.mark.parametrize("program", range(24, 32))
+def test_guitars_do_take_a_role(program):
+    ppq = 480
+    notes = [Note(i * ppq, i * ppq + ppq, 40, 100, 0) for i in range(200)]
+    segment = Segment(program=program, is_drum=False, notes=notes)
+
+    assert classify_role(segment, ppq, 200 * ppq, "Guitar", vocal=False) is not None
+
+
+def _mixed_guitar(ppq):
+    """Alternating two-bar blocks of strummed chords and single-note line."""
+    notes = []
+    for block in range(8):
+        base = block * ppq * 8
+        if block % 2:
+            for beat in range(8):  # chords
+                for pitch in (52, 55, 59):
+                    notes.append(Note(base + beat * ppq, base + beat * ppq + ppq, pitch, 100, 0))
+        else:
+            for beat in range(8):  # single line
+                notes.append(Note(base + beat * ppq, base + beat * ppq + ppq, 64 + beat, 100, 0))
+    return Segment(program=27, is_drum=False, notes=notes)
+
+
+def test_mixed_guitar_is_not_marked_rhythm():
+    """A guitar that moves between riff, chords and solo is not accompaniment;
+    averaging it into one label produces a part that is neither."""
+    ppq = 480
+    role = classify_role(_mixed_guitar(ppq), ppq, 64 * ppq, "Guitar", vocal=False)
+    assert role.mixed
+    assert not role.rhythm
+
+
+def test_mixed_guitar_named_rhythm_stays_rhythm():
+    """The source MIDI naming it rhythm outranks the mixed-usage finding."""
+    ppq = 480
+    role = classify_role(_mixed_guitar(ppq), ppq, 64 * ppq, "Rhythm Guitar", vocal=False)
     assert role.rhythm
+
+
+def test_uniformly_chordal_guitar_is_rhythm():
+    ppq = 480
+    notes = []
+    for beat in range(200):
+        for pitch in (52, 55, 59):
+            notes.append(Note(beat * ppq, beat * ppq + ppq, pitch, 100, 0))
+    segment = Segment(program=27, is_drum=False, notes=notes)
+
+    role = classify_role(segment, ppq, 200 * ppq, "Guitar", vocal=False)
+    assert role.rhythm
+    assert not role.mixed
 
 
 def test_sparse_solo_is_lead():
@@ -144,11 +200,11 @@ def test_sparse_solo_is_lead():
     assert not role.rhythm
 
 
-def test_drums_are_always_rhythm():
-    ppq = 480
-    segment = Segment(program=0, is_drum=True, notes=[Note(0, 10, 36, 100, 9)])
-    role = classify_role(segment, ppq, song_ticks=400 * ppq, source_name="Tambourine", vocal=False)
-    assert role.rhythm
+def test_track_name_omits_role_for_non_guitars():
+    """No colon is how a name says the part carries no role."""
+    assert gm.track_name(33, False, None) == "electric-bass-finger"
+    assert gm.track_name(None, True, None) == "drums"
+    assert gm.track_name(0, False, None) == "acoustic-grand-piano"
 
 
 def test_coverage_separates_continuous_from_bursty():

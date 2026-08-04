@@ -43,12 +43,13 @@ class BuildResult:
 class _Candidate:
     program: int
     is_drum: bool
-    rhythm: bool
+    # None for every part that carries no role, which is everything but guitars.
+    rhythm: bool | None
     notes: list[Note]
     match: Match
     source_name: str
     vocal: bool
-    role: classify.Role
+    role: classify.Role | None
 
 
 def build(path: Path, library: Library, min_score: float) -> BuildResult:
@@ -85,7 +86,7 @@ def build(path: Path, library: Library, min_score: float) -> BuildResult:
                 _Candidate(
                     program=program,
                     is_drum=segment.is_drum,
-                    rhythm=role.rhythm,
+                    rhythm=role.rhythm if role else None,
                     notes=segment.notes,
                     match=found,
                     source_name=label,
@@ -103,15 +104,21 @@ def build(path: Path, library: Library, min_score: float) -> BuildResult:
 
 
 def _merge_into(result: BuildResult, candidates: list[_Candidate], song: Song) -> None:
-    """Collapse candidates sharing a `(program, rhythm)` pair into one part."""
-    groups: dict[tuple[int | None, bool, bool], list[_Candidate]] = {}
+    """Collapse candidates sharing a `(program, rhythm)` pair into one part.
+
+    For everything but guitars `rhythm` is None, so the pair degenerates to the
+    program alone and, say, two piano tracks merge into one part.
+    """
+    groups: dict[tuple[int | None, bool, bool | None], list[_Candidate]] = {}
     for candidate in candidates:
         key = (None if candidate.is_drum else candidate.program, candidate.is_drum, candidate.rhythm)
         groups.setdefault(key, []).append(candidate)
 
-    for (program, is_drum, rhythm), members in sorted(
-        groups.items(), key=lambda kv: (kv[0][1], kv[0][0] if kv[0][0] is not None else -1, kv[0][2])
-    ):
+    def order(item):
+        (program, is_drum, rhythm), _ = item
+        return (is_drum, program if program is not None else -1, rhythm is True)
+
+    for (program, is_drum, rhythm), members in sorted(groups.items(), key=order):
         notes = sorted((n for m in members for n in m.notes), key=lambda n: n.start)
         best = max(members, key=lambda m: m.match.score)
         track_name = gm.track_name(program, is_drum, rhythm)
@@ -144,9 +151,10 @@ def _merge_into(result: BuildResult, candidates: list[_Candidate], song: Song) -
                 "preset_name": best.match.preset_name,
                 "match_confidence": round(best.match.score, 3),
                 "match_reasons": best.match.reasons,
-                "role_confidence": round(best.role.confidence, 3),
-                "role_evidence": best.role.evidence,
-                "role_annotation_note": best.role.note,
+                "role_confidence": round(best.role.confidence, 3) if best.role else None,
+                "role_evidence": best.role.evidence if best.role else ["no role: not a guitar"],
+                "role_annotation_note": best.role.note if best.role else None,
+                "role_mixed": best.role.mixed if best.role else False,
                 "vocal_substitution": vocal,
             }
         )

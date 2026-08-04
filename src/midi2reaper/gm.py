@@ -99,12 +99,18 @@ def is_bass(program: int) -> bool:
     return program in BASS_PROGRAMS
 
 
-def track_name(program: int | None, is_drum: bool, rhythm: bool) -> str:
-    """Canonical `<slug>:<role>` name required by DATA_CONTRACT.md.
+def track_name(program: int | None, is_drum: bool, rhythm: bool | None) -> str:
+    """Canonical part name required by DATA_CONTRACT.md.
+
+    Guitars are named `<slug>:<role>`; everything else is named `<slug>` alone,
+    because role is a guitar-only annotation. The absence of a colon is what
+    says "this part takes no role", so it is not an omission to tidy up.
 
     This name is the interface to `reaper2mt3`, which parses it back out of the
     REAPER project as the training label. Changing the grammar here without
     changing it there mis-labels a corpus silently.
     """
     part = DRUM_SLUG if is_drum else program_slug(program)
+    if rhythm is None:
+        return part
     return f"{part}:{'rhythm' if rhythm else 'lead'}"
