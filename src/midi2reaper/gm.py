@@ -100,30 +100,11 @@ def is_bass(program: int) -> bool:
 
 
 def track_name(program: int | None, is_drum: bool, rhythm: bool) -> str:
-    """Canonical `<slug>:<role>` name required by DATA_CONTRACT.md."""
+    """Canonical `<slug>:<role>` name required by DATA_CONTRACT.md.
+
+    This name is the interface to `reaper2mt3`, which parses it back out of the
+    REAPER project as the training label. Changing the grammar here without
+    changing it there mis-labels a corpus silently.
+    """
     part = DRUM_SLUG if is_drum else program_slug(program)
     return f"{part}:{'rhythm' if rhythm else 'lead'}"
-
-
-_SLUG_TO_PROGRAM = {program_slug(p): p for p in range(128)}
-
-
-def parse_track_name(name: str) -> tuple[int | None, bool, bool] | None:
-    """Inverse of `track_name`: returns (program, is_drum, rhythm).
-
-    Reads only the canonical `<slug>:<role>` prefix, so anything appended for
-    human benefit — the source track, a `[vocal→instrument]` marker — is
-    ignored, and a project edited in REAPER still parses.
-    """
-    head = name.split("|", 1)[0].strip()
-    slug, _, role = head.partition(":")
-    role = role.strip().split()[0] if role.strip() else ""
-    if role not in ("rhythm", "lead"):
-        return None
-    slug = slug.strip()
-    if slug == DRUM_SLUG:
-        return None, True, role == "rhythm"
-    program = _SLUG_TO_PROGRAM.get(slug)
-    if program is None:
-        return None
-    return program, False, role == "rhythm"

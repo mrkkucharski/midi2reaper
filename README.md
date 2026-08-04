@@ -2,22 +2,21 @@
 
 Turns multi-track MIDI arrangements into REAPER projects where every part is
 loaded into its own [SFLT](https://estrobiologist.gumroad.com/p/sflt-beta-v0-10-released)
-SoundFont player instance, ready to audition and render.
+SoundFont player instance, ready to audition.
 
 It exists to build training data for the MT3 fine-tune in `../DATA_CONTRACT.md`,
 which this tool implements: guitar anchors corpus membership, vocals are
 rendered as instruments rather than skipped, unresolvable tracks are dropped,
 and tracks that change program mid-song are split into one part per program.
 
-Two stages, with a human checkpoint between them:
+This tool stops at a project you can open and verify by ear. Turning verified
+projects into training examples is [`reaper2mt3`](../reaper2mt3)'s job.
 
-1. **`build`** — source MIDI → REAPER projects you open and verify by ear.
-2. **`dataset`** — verified projects → aligned WAV/MIDI pairs plus a manifest.
-
-The RPP is the handover. Stage two reads the soundfont assignment, part labels
-and notes back out of the project, so any correction made in REAPER — a swapped
-soundfont, a renamed part, an edited note — carries through instead of being
-overwritten by re-deriving from the source arrangement.
+The `.RPP` is the handover between the two, and REAPER track names are the
+interface: each part is titled `<slug>:<role>` — `distortion-guitar:rhythm` —
+which `reaper2mt3` parses back as the training label. Because the project is
+read rather than the source MIDI, corrections made while auditioning (a swapped
+soundfont, a renamed part, an edited note) carry through.
 
 ## Requirements
 
@@ -78,20 +77,10 @@ Two files in this collection are not readable SoundFonts and are skipped —
 `pianos/FOXPIAN2.SBK` (older SBK format) and
 `planet-phatt-hip-hop/sbs Sub 4 Gold.sf2`. That is expected, not an error.
 
-### 4. FluidSynth  [2.5.7]
+### 4. Python  [3.11]
 
-```sh
-brew install fluid-synth
-```
-
-Renders the dataset audio. Required by `dataset` only; `build` and `validate`
-do not use it. See [Why FluidSynth and not SFLT](#rendering-audio) for why the
-renderer is not the same program that plays the projects you audition.
-
-### 5. Python  [3.11]
-
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/). Runtime
-dependencies are `mido` and `numpy`; `pytest` is used for the tests.
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/). The only runtime
+dependency is `mido`; `pytest` is used for the tests.
 
 ## Usage
 
@@ -103,28 +92,14 @@ uv pip install --python .venv/bin/python -e .
 .venv/bin/midi2reaper build ../reaper/midi-src -o ../reaper/generated \
     --report ../reaper/generated/report.json
 .venv/bin/midi2reaper validate ../reaper/generated     # every preset resolvable
-
-# --- verify the projects in REAPER, correct anything wrong, then ---
-
-.venv/bin/midi2reaper dataset ../reaper/generated -o ../data/pilot
 ```
 
 `build` writes one `.RPP` per accepted source file, plus a JSON report
 recording every match, its score and the evidence behind each rhythm/lead call.
 Open a project in REAPER and press play — no further setup is needed.
 
-`dataset` renders each part, mixes to mono, writes the label MIDI and manifest,
-and runs the acceptance checks from `DATA_CONTRACT.md` against what it wrote:
-
-```text
-data/pilot/
-  manifest.jsonl
-  midi/train/ex_0002.mid      audio/train/ex_0002.wav
-  midi/test/ex_0001.mid       audio/test/ex_0001.wav
-```
-
-A non-zero exit means at least one example failed a check; every failure is
-printed with the contract check number that caught it.
+Once the projects sound right, hand them to
+[`reaper2mt3`](../reaper2mt3) to render the corpus.
 
 ## How it works
 
@@ -160,34 +135,6 @@ multiple of 128 and silently merge into the next block.
 with auto-find-preset enabled (its default) a stray program change does not go
 silent — it snaps a multi-preset bank to the *wrong* instrument.
 
-### Rendering audio
-
-**Why FluidSynth and not SFLT.** Hosting SFLT in
-[Pedalboard](https://github.com/spotify/pedalboard) was tried and does not work.
-SFLT loads its soundfont only inside `initialize()`
-(`sflt-nih/src/lib.rs:1240`), which the host calls once before any state can be
-injected; a soundfont set afterwards is stored but never loaded, and the plugin
-renders silence. Injecting through `raw_state` (JUCE base64) and through
-`preset_data` (a rebuilt VST3 preset) both fail the same way, as does forcing
-re-initialisation by changing sample rate. The tell is that `patch_number` never
-snaps to a valid preset, which `auto_find_preset` would do had the soundfont
-loaded.
-
-FluidSynth reads the same `.sf2` with the same bank and patch, runs headless and
-offline at roughly 90× realtime, and is the conventional renderer for
-SoundFont-derived transcription corpora. **The consequence is that REAPER is an
-approximate audition, not an exact preview** — same soundfont and preset, but a
-different synthesis engine, so timbre differs in detail.
-
-Each part renders in its own FluidSynth process, which keeps one soundfont
-loaded at a time and isolates crashes. Reverb and chorus are off by default for
-reproducibility; the mix is peak-normalised to −1 dBFS.
-
-**Labels are not preset numbers.** A part is *rendered* with the soundfont's own
-bank and patch, which are arbitrary — `Power Guitar 1.sf2` sits at patch 0. It
-is *labelled* with the GM program its canonical track name declares, which is
-the training target. The corpus MIDI carries the label, never the patch.
-
 ## Known limits
 
 - Soundfont paths are absolute and point at `/Users/Shared/Soundfonts`, SFLT's
@@ -195,13 +142,5 @@ the training target. The corpus MIDI carries the label, never the patch.
   `validate` detects this.
 - Matching is heuristic. Review `report.json` before trusting a batch: every
   part carries its score, the reasons behind it, and the role evidence.
-- What you audition in REAPER is not bit-identical to what is rendered, because
-  SFLT and FluidSynth are different synthesis engines reading the same file.
-- FluidSynth appends its own post-roll on top of `--tail-seconds`, so the
-  manifest records the tail actually present in the file (4.0 s at the default
-  2.0 s request) rather than the value asked for.
-- Overlapping identical pitches within one part are paired first-in-first-out.
-  Counts and onsets survive exactly; nested durations may swap between the two
-  notes, which MIDI itself cannot disambiguate.
-- Augmentation (velocity curves, room IRs, alternate presets per source) is not
-  implemented. Each source currently yields exactly one render.
+- Rendering to audio is out of scope. `build` stops at a project you can
+  open, verify and play; `reaper2mt3` takes it from there.
