@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from midi2reaper import gm
-from midi2reaper.classify import chord_ratio, classify_role, coverage, is_vocal
+from midi2reaper.classify import chord_ratio, classify_role, coverage, is_vocal, onset_polyphony
 from midi2reaper.midiscan import Note, Segment
 from midi2reaper.rpp import B64_LINE_WIDTH, midi_events, sflt_chunk
 
@@ -92,6 +92,36 @@ def test_chord_ratio_counts_simultaneous_onsets():
     assert chord_ratio(chord, window=30) == 1.0
     melody = [Note(i * 200, i * 200 + 100, 60, 100, 0) for i in range(4)]
     assert chord_ratio(melody, window=30) == 0.0
+
+
+def test_sustain_does_not_count_as_polyphony():
+    """A fingerpicked line whose notes ring into each other is played one note
+    at a time. Measuring sustain overlap instead of onsets read a purely
+    sequential guitar part as 5.7-voice polyphony and pushed it to 'rhythm'."""
+    ppq = 480
+    ringing = [Note(i * ppq, i * ppq + ppq * 6, 60 + i, 100, 0) for i in range(8)]
+    assert onset_polyphony(ringing, ppq // 16) == 1.0
+    assert chord_ratio(ringing, ppq // 16) == 0.0
+
+
+def test_onset_polyphony_counts_struck_chords():
+    ppq = 480
+    strummed = []
+    for bar in range(4):
+        for offset, pitch in enumerate((52, 55, 59)):
+            # a strum rolls across the strings a few milliseconds apart
+            strummed.append(Note(bar * ppq + offset * 4, bar * ppq + ppq * 4, pitch, 100, 0))
+    assert onset_polyphony(strummed, ppq // 16) == pytest.approx(3.0)
+
+
+def test_sustained_arpeggio_is_lead_not_rhythm():
+    """Regression: sustained single-note lines were classified as accompaniment."""
+    ppq = 480
+    notes = [Note(i * ppq // 2, i * ppq // 2 + ppq * 8, 60 + (i % 5), 100, 0) for i in range(60)]
+    segment = Segment(program=27, is_drum=False, notes=notes)
+
+    role = classify_role(segment, ppq, song_ticks=200 * ppq, source_name="Guitar", vocal=False)
+    assert not role.rhythm
 
 
 def test_monophonic_bass_is_rhythm_not_lead():

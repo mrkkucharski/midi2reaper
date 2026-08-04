@@ -56,14 +56,26 @@ def chord_ratio(notes: list[Note], window: int) -> float:
     return grouped / len(starts)
 
 
-def mean_polyphony(notes: list[Note]) -> float:
-    """Average number of simultaneously sounding notes over the part's span."""
+def onset_polyphony(notes: list[Note], window: int) -> float:
+    """Average notes per onset group — 1.0 for a purely sequential line.
+
+    Deliberately measures notes *struck* together rather than notes *sounding*
+    together. Sustain overlap cannot tell a strummed chord from a fingerpicked
+    arpeggio whose notes ring into one another: a monophonic line with long
+    release reaches an overlap of 5.7 while striking one note at a time.
+    """
     if not notes:
         return 0.0
-    span = max(n.end for n in notes) - min(n.start for n in notes)
-    if span <= 0:
-        return float(len(notes))
-    return sum(n.end - n.start for n in notes) / span
+    starts = sorted(n.start for n in notes)
+    groups = 0
+    i = 0
+    while i < len(starts):
+        j = i
+        while j + 1 < len(starts) and starts[j + 1] - starts[i] <= window:
+            j += 1
+        groups += 1
+        i = j + 1
+    return len(starts) / groups
 
 
 def coverage(notes: list[Note], ppq: int, song_ticks: int) -> float:
@@ -98,21 +110,23 @@ def classify_role(
 
     window = max(1, ppq // 16)
     ratio = chord_ratio(notes, window)
-    polyphony = mean_polyphony(notes)
+    polyphony = onset_polyphony(notes, window)
     span = coverage(notes, ppq, song_ticks)
 
     score = 0.0
     evidence: list[str] = []
 
-    score += max(-0.8, min(0.8, (span - 0.45) * 1.8))
-    evidence.append(f"coverage {span:.2f}")
-
-    # Chords and polyphony only ever argue *for* accompaniment.
-    score += max(0.0, min(0.7, (ratio - 0.15) * 1.8))
+    # Chordal texture is the strongest evidence of accompaniment, and a line
+    # that is genuinely sequential is evidence the other way, so this term is
+    # the only one allowed to argue in both directions on musical content.
+    score += max(-0.6, min(0.8, (ratio - 0.30) * 1.7))
     evidence.append(f"chord ratio {ratio:.2f}")
 
-    score += max(0.0, min(0.5, (polyphony - 1.2) * 0.7))
-    evidence.append(f"mean polyphony {polyphony:.2f}")
+    score += max(0.0, min(0.4, (polyphony - 1.5) * 0.4))
+    evidence.append(f"onset polyphony {polyphony:.2f}")
+
+    score += max(-0.6, min(0.6, (span - 0.45) * 1.4))
+    evidence.append(f"coverage {span:.2f}")
 
     if vocal:
         score -= 0.6
