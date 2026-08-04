@@ -116,7 +116,9 @@ def scan(path: Path) -> Song:
         name = ""
         saw_program_change = False
         program_by_channel: dict[int, int] = {}
-        open_notes: dict[tuple[int, int], tuple[int, int]] = {}
+        # Queue per (channel, pitch): a source track may restrike a pitch before
+        # releasing it, and a plain dict would keep only the last of the run.
+        open_notes: dict[tuple[int, int], list[tuple[int, int]]] = {}
         by_key: dict[tuple[int, bool], list[Note]] = {}
         tick = 0
 
@@ -134,12 +136,14 @@ def scan(path: Path) -> Song:
                 saw_program_change = True
                 program_by_channel[message.channel] = message.program
             elif kind == "note_on" and message.velocity > 0:
-                open_notes[(message.channel, message.note)] = (tick, message.velocity)
+                open_notes.setdefault((message.channel, message.note), []).append(
+                    (tick, message.velocity)
+                )
             elif kind in ("note_off", "note_on"):
-                started = open_notes.pop((message.channel, message.note), None)
-                if started is None:
+                queue = open_notes.get((message.channel, message.note))
+                if not queue:
                     continue
-                start, velocity = started
+                start, velocity = queue.pop(0)
                 is_drum = message.channel == DRUM_CHANNEL
                 program = 0 if is_drum else program_by_channel.get(message.channel, 0)
                 note = Note(start, max(tick, start + 1), message.note, velocity, message.channel)

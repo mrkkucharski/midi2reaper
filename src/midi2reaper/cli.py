@@ -34,12 +34,94 @@ def main(argv: list[str] | None = None) -> int:
     check_cmd = sub.add_parser("validate", help="check generated projects load a real preset")
     check_cmd.add_argument("projects", nargs="+", type=Path, help="RPP files or directories")
 
+    data_cmd = sub.add_parser("dataset", help="render verified projects into MT3 training examples")
+    data_cmd.add_argument("projects", nargs="+", type=Path, help="RPP files or directories")
+    data_cmd.add_argument("-o", "--out", type=Path, required=True, help="dataset root")
+    data_cmd.add_argument("--test-fraction", type=float, default=0.2)
+    data_cmd.add_argument("--sample-rate", type=int, default=44100)
+    data_cmd.add_argument("--tail-seconds", type=float, default=2.0)
+    data_cmd.add_argument("--gain", type=float, default=0.6)
+    data_cmd.add_argument("--keep-stems", action="store_true", help="retain per-part renders")
+
     args = parser.parse_args(argv)
     if args.command == "index":
         return _index(args)
     if args.command == "validate":
         return _validate(args)
+    if args.command == "dataset":
+        return _dataset(args)
     return _build(args)
+
+
+def _collect_projects(items: list[Path]) -> list[Path]:
+    projects: list[Path] = []
+    for item in items:
+        if item.is_dir():
+            projects += sorted(item.rglob("*.RPP"))
+        else:
+            projects.append(item)
+    return projects
+
+
+def _dataset(args: argparse.Namespace) -> int:
+    import shutil
+    import tempfile
+
+    from .dataset import assign_splits, build_example, write_manifest
+    from .render import RenderError, RenderSettings, fluidsynth_version
+    from .rppread import read_project
+
+    try:
+        renderer = fluidsynth_version()
+    except RenderError as error:
+        print(error, file=sys.stderr)
+        return 2
+
+    settings = RenderSettings(
+        sample_rate=args.sample_rate, tail_seconds=args.tail_seconds, gain=args.gain
+    )
+    work_dir = Path(tempfile.mkdtemp(prefix="midi2reaper-"))
+    examples, failures = [], 0
+
+    paths = _collect_projects(args.projects)
+    splits = assign_splits([p.stem for p in paths], args.test_fraction)
+
+    try:
+        for index, path in enumerate(paths, start=1):
+            project = read_project(path)
+            if not project.parts:
+                print(f"SKIP    {path.name}: no SFLT parts found")
+                failures += 1
+                continue
+
+            example_id = f"ex_{index:04d}"
+            split = splits[project.name]
+            try:
+                example = build_example(project, args.out, example_id, split, settings,
+                                        work_dir, renderer)
+            except RenderError as error:
+                print(f"FAIL    {path.name}: {error}")
+                failures += 1
+                continue
+
+            examples.append(example)
+            status = "OK " if not example.problems else "PROB"
+            print(f"{status}    {example_id} [{split}] {path.stem[:40]:<40} "
+                  f"{len(project.parts)} parts")
+            for problem in example.problems:
+                print(f"          {problem}")
+
+        if examples:
+            write_manifest(examples, args.out / "manifest.jsonl")
+        if args.keep_stems:
+            shutil.copytree(work_dir, args.out / "stems", dirs_exist_ok=True)
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+    clean = sum(1 for e in examples if not e.problems)
+    print(f"\n{len(examples)} example(s) written to {args.out} "
+          f"({clean} clean, {len(examples) - clean} with problems, {failures} failed)")
+    return 1 if failures or clean != len(examples) else 0
 
 
 def _validate(args: argparse.Namespace) -> int:
