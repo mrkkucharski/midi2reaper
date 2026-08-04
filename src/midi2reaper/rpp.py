@@ -35,17 +35,17 @@ VST_LINE = (
 B64_LINE_WIDTH = 128
 DRUM_CHANNEL = 9
 
-# Project-wide defaults matching the render settings tuned by ear in
-# Californication (master fader at -6.15 dB, mono 16-bit render) and then
-# applied to every other generated project. Baked in here so a fresh `build`
-# already has them instead of every project needing the same manual edit.
+# Project-wide defaults matching the tuned render settings (mono 16-bit render
+# by ear in Californication; master fader set to -10 dB) applied to every
+# generated project. Baked in here so a fresh `build` already has them instead
+# of every project needing the same manual edit.
 #
 # Bit depth and channel count are stored in two places that must agree: the
 # plain-text RENDER_FMT line and an opaque base64 blob in RENDER_CFG. Decoding
 # the blob confirms what it encodes rather than assuming: it starts with the
 # ASCII fourcc "wave" reversed ("evaw"), followed by a little-endian bit-depth
 # field -- 0x18 (24) in REAPER's own default, 0x10 (16) here.
-MASTER_VOLUME_GAIN = 0.49277612740681  # linear; -6.15 dB
+MASTER_VOLUME_GAIN = 0.31622776601684  # linear; -10 dB
 RENDER_FMT_LINE = "  RENDER_FMT 0 1 44100"  # channel field: 1 = mono
 RENDER_CFG_B64 = "ZXZhdxAAAQ=="  # 'evaw' + bit depth 0x0010 (16-bit) + flags
 

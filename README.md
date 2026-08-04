@@ -159,7 +159,7 @@ Once the projects sound right, hand them to
 
 ## Project-wide render defaults
 
-Every generated project ships with master volume at **-6.15 dB**, and render
+Every generated project ships with master volume at **-10 dB**, and render
 format **mono / 16-bit** -- tuned by ear once in Californication, then applied
 to every other project by hand. New projects need neither edit again.
 

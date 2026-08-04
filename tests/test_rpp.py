@@ -72,8 +72,8 @@ def _empty_song(tmp_path):
 
 
 def test_project_defaults_match_tuned_render_settings(tmp_path):
-    """Californication was tuned by ear to -6.15 dB / mono / 16-bit and that
-    setting applied to every other project by hand; new projects must not need
+    """Render was tuned by ear to mono/16-bit and master volume to -10 dB, and
+    that setting applied to every project by hand; new projects must not need
     the same manual edit again."""
     out = tmp_path / "out.RPP"
     write_project(_empty_song(tmp_path), [], out)
