@@ -13,10 +13,11 @@ This tool stops at a project you can open and verify by ear. Turning verified
 projects into training examples is [`reaper2mt3`](../reaper2mt3)'s job.
 
 The `.RPP` is the handover between the two, and REAPER track names are the
-interface: each part is titled `<slug>:<role>` — `distortion-guitar:rhythm` —
-which `reaper2mt3` parses back as the training label. Because the project is
-read rather than the source MIDI, corrections made while auditioning (a swapped
-soundfont, a renamed part, an edited note) carry through.
+interface: a guitar playing chordal accompaniment is titled
+`distortion-guitar:rhythm`, every other part just `tenor-sax`, and `reaper2mt3`
+parses those back as the training labels. Because the project is read rather
+than the source MIDI, corrections made while auditioning (a swapped soundfont, a
+renamed part, an edited note) carry through.
 
 ## Requirements
 
@@ -109,12 +110,18 @@ exactly "Electric Guitar (clean)". An exact patch hit outweighs any name
 evidence; library category and keyword overlap resolve the rest. Parts with no
 candidate above `--min-score` are skipped rather than guessed at.
 
-**Rhythm vs lead — guitars only.** Role is annotated for programs 24–31 and left
-unset for everything else; bass, drums, keys and rendered vocals carry a program
-and no role. Their track names have no `:role` suffix, and the missing colon is
-the statement that the part takes no role.
+**`rhythm` — guitars only, and only when unambiguous.** A guitar playing chordal
+accompaniment throughout is named `<slug>:rhythm`. Everything else — guitars that
+lead, guitars that mix roles, and every non-guitar — is named `<slug>` alone.
 
-It is inferred from content, with track names as corroboration only. Two things
+There is deliberately no `lead`. Guitars between the two roles form a continuum
+with no natural cut (8 of 34 surveyed parts sit at a chord ratio of 0.30–0.60),
+and only about a sixth are unambiguous leads, so a third label would add a bucket
+beside the ambiguity rather than resolve it — at the cost of a three-valued
+target in the MT3 codec. Absence of `:rhythm` claims only that the part is not
+chordal accompaniment.
+
+Role is inferred from content, with track names as corroboration only. Two things
 it deliberately does *not* do:
 
 - **Sustain is not polyphony.** Simultaneity is measured at note onsets. A
@@ -122,7 +129,7 @@ it deliberately does *not* do:
   time; measuring sustained overlap instead scored a purely sequential guitar
   line at 5.7 voices and pushed it to "rhythm".
 - **A guitar that changes role is not rhythm.** One that plays melody in one
-  section, chords in another and a solo in a third is marked `lead`, because
+  section, chords in another and a solo in a third is left unannotated, because
   averaging it produces a label describing neither section. Stairway's acoustic
   guitar (45 of 58 windows chordal) and Californication's Gretsch (32 of 63) are
   both this case. The exception is a source track named `Rhythm Guitar` with

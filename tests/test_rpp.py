@@ -73,8 +73,16 @@ def test_drums_use_channel_ten():
 
 def test_track_name_matches_contract():
     assert gm.track_name(30, False, True) == "distortion-guitar:rhythm"
-    assert gm.track_name(66, False, False) == "tenor-sax:lead"
-    assert gm.track_name(None, True, True) == "drums:rhythm"
+    assert gm.track_name(66, False, None) == "tenor-sax"
+    assert gm.track_name(None, True, None) == "drums"
+
+
+def test_only_rhythm_is_ever_annotated():
+    """There is no `lead`: absence of `:rhythm` says the part is not chordal
+    accompaniment, which is all that can be claimed."""
+    assert gm.track_name(30, False, False) == "distortion-guitar"
+    assert gm.track_name(30, False, None) == "distortion-guitar"
+    assert ":lead" not in gm.track_name(27, False, False)
 
 
 @pytest.mark.parametrize("name", ["Lead Vocals", "Voc", "Kurt Cobain | Vocals", "backing vox"])

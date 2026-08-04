@@ -86,7 +86,8 @@ def build(path: Path, library: Library, min_score: float) -> BuildResult:
                 _Candidate(
                     program=program,
                     is_drum=segment.is_drum,
-                    rhythm=role.rhythm if role else None,
+                    # `rhythm` is annotated or absent; there is no negative case.
+                    rhythm=True if (role and role.rhythm) else None,
                     notes=segment.notes,
                     match=found,
                     source_name=label,

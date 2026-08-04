@@ -102,15 +102,19 @@ def is_bass(program: int) -> bool:
 def track_name(program: int | None, is_drum: bool, rhythm: bool | None) -> str:
     """Canonical part name required by DATA_CONTRACT.md.
 
-    Guitars are named `<slug>:<role>`; everything else is named `<slug>` alone,
-    because role is a guitar-only annotation. The absence of a colon is what
-    says "this part takes no role", so it is not an omission to tidy up.
+    `rhythm` is the only annotation there is. A guitar playing chordal
+    accompaniment throughout is named `<slug>:rhythm`; every other part —
+    guitars that lead, guitars that mix roles, and everything that is not a
+    guitar — is named `<slug>` alone.
+
+    There is deliberately no `lead`. Marking it would need a third label state
+    for a minority of parts, while the guitars between the two roles have no
+    natural boundary to cut at; the absence of `:rhythm` says only that the part
+    is not chordal accompaniment, which is exactly as much as can be claimed.
 
     This name is the interface to `reaper2mt3`, which parses it back out of the
     REAPER project as the training label. Changing the grammar here without
     changing it there mis-labels a corpus silently.
     """
     part = DRUM_SLUG if is_drum else program_slug(program)
-    if rhythm is None:
-        return part
-    return f"{part}:{'rhythm' if rhythm else 'lead'}"
+    return f"{part}:rhythm" if rhythm else part
