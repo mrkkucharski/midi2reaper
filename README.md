@@ -157,6 +157,57 @@ library can stay partial indefinitely. `--no-chains` ignores it entirely.
 Once the projects sound right, hand them to
 [`reaper2mt3`](../reaper2mt3) to render the corpus.
 
+## Current chain library
+
+The library itself lives outside this repo, at `~/.config/midi2reaper/chains`,
+and accumulates as more songs get tuned — this is a snapshot taken
+2026-08-04, not a tracked file. Regenerate it anytime with
+`midi2reaper chains list`.
+
+| Part | Chain |
+| --- | --- |
+| `acoustic-grand-piano` | Kontakt 8 |
+| `acoustic-guitar-nylon`, `:rhythm` | Kontakt 8 |
+| `acoustic-guitar-steel`, `:rhythm` | Ample Guitar M II Lite |
+| `distortion-guitar` | Kontakt 8 → Guitar Rig 7 |
+| `drums` | Kontakt 8 |
+| `electric-bass-finger` | midi/midi_transpose → Ample Bass P Lite |
+| `electric-bass-pick` | midi/midi_transpose → Ample Bass P Lite |
+| `electric-grand-piano` | Kontakt 8 |
+| `electric-guitar-clean`, `:rhythm` | Kontakt 8 → Guitar Rig 7 |
+| `electric-guitar-jazz`, `:rhythm` | Kontakt 8 → Guitar Rig 7 |
+| `fretless-bass` | midi/midi_transpose → Ample Bass P Lite |
+| `overdriven-guitar`, `:rhythm` | Kontakt 8 → Guitar Rig 7 |
+| `tenor-sax` | Kontakt 8 |
+
+Family aliases: `@bass` → `electric-bass-finger`, `@guitar` → `overdriven-guitar`.
+
+**External plugin dependencies** — installed and configured by you, this tool
+only references them: Kontakt 8, Guitar Rig 7 (Native Instruments), Ample Bass
+P Lite, Ample Guitar M II Lite (Ample Sound), and REAPER's bundled
+`midi/midi_transpose` JS effect.
+
+**Still on SFLT/soundfont fallback**, no chain harvested yet — mostly
+orchestral and one-off parts:
+
+| Part | Songs | Soundfont |
+| --- | --- | --- |
+| `clarinet` | 5 | `flutes/DCs_Mellotron_Flute.SF2` |
+| `string-ensemble-1`, `violin`, `viola`, `cello`, `orchestral-harp` | 6 | `strings/String sect.sf2` |
+| `rock-organ`, `drawbar-organ` | 2 | `organs/Open_Diapason_Pipe_Organ.sf2.sf2` |
+| `electric-piano-1` | 1 | `pianos/9MB Piano.sf2` |
+| `recorder` | 1 | `flutes/DCs_Mellotron_Flute.SF2` |
+| `trombone` | 1 | `brass/ZSF_Brass_Trombone.sf2` |
+| `french-horn` | 1 | `st-james-orchestra/SJO - French Horn.sf2` |
+| `baritone-sax` | 1 | `brass/1276_Soft_Tenor_Sax.sf2` |
+| `lead-8-bass-plus-lead` | 1 | `synths/198_d10_TEK_bass.sf2` |
+| `choir-aahs`, `voice-oohs`, `synth-voice` | 1 each | `choirs/*.sf2` |
+| `lead-3-calliope` | 1 | `synths/Pro53 Lead.sf2` |
+| `pad-8-sweep` | 1 | `synths/HS Synth Collection I.sf2` |
+
+`strings/String sect.sf2` covers the most parts of any single fallback — the
+best next candidate for a harvested chain.
+
 ## Project-wide render defaults
 
 Every generated project ships with master volume at **-10 dB**, and render
