@@ -157,6 +157,22 @@ library can stay partial indefinitely. `--no-chains` ignores it entirely.
 Once the projects sound right, hand them to
 [`reaper2mt3`](../reaper2mt3) to render the corpus.
 
+## Project-wide render defaults
+
+Every generated project ships with master volume at **-6.15 dB**, and render
+format **mono / 16-bit** -- tuned by ear once in Californication, then applied
+to every other project by hand. New projects need neither edit again.
+
+Bit depth and channel count are stored in two places that must agree: the
+plain-text `RENDER_FMT` line and an opaque base64 blob in `RENDER_CFG`
+(`src/midi2reaper/rpp.py`). The blob was decoded rather than guessed at: it
+starts with the ASCII fourcc `wave` reversed, followed by a little-endian
+bit-depth field. `RECORD_CFG`, which governs live recording rather than
+rendering, is untouched.
+
+To change the defaults, edit `MASTER_VOLUME_GAIN`, `RENDER_FMT_LINE` and
+`RENDER_CFG_B64` at the top of `rpp.py`.
+
 ## How it works
 
 **Soundfont matching.** The strongest signal is that many single-instrument

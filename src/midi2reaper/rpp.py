@@ -35,6 +35,20 @@ VST_LINE = (
 B64_LINE_WIDTH = 128
 DRUM_CHANNEL = 9
 
+# Project-wide defaults matching the render settings tuned by ear in
+# Californication (master fader at -6.15 dB, mono 16-bit render) and then
+# applied to every other generated project. Baked in here so a fresh `build`
+# already has them instead of every project needing the same manual edit.
+#
+# Bit depth and channel count are stored in two places that must agree: the
+# plain-text RENDER_FMT line and an opaque base64 blob in RENDER_CFG. Decoding
+# the blob confirms what it encodes rather than assuming: it starts with the
+# ASCII fourcc "wave" reversed ("evaw"), followed by a little-endian bit-depth
+# field -- 0x18 (24) in REAPER's own default, 0x10 (16) here.
+MASTER_VOLUME_GAIN = 0.49277612740681  # linear; -6.15 dB
+RENDER_FMT_LINE = "  RENDER_FMT 0 1 44100"  # channel field: 1 = mono
+RENDER_CFG_B64 = "ZXZhdxAAAQ=="  # 'evaw' + bit depth 0x0010 (16-bit) + flags
+
 
 @dataclass
 class RenderPart:
@@ -239,7 +253,7 @@ def write_project(song: Song, parts: list[RenderPart], out_path: Path) -> None:
         "  >",
         '  RENDER_FILE ""',
         '  RENDER_PATTERN ""',
-        "  RENDER_FMT 0 2 0",
+        RENDER_FMT_LINE,
         "  RENDER_1X 0",
         "  RENDER_RANGE 1 0 0 18 1000",
         "  RENDER_RESAMPLE 3 0 1",
@@ -254,7 +268,7 @@ def write_project(song: Song, parts: list[RenderPart], out_path: Path) -> None:
         "  TAKELANE 1",
         "  SAMPLERATE 44100 0 0",
         "  <RENDER_CFG",
-        "    ZXZhdxgAAQ==",
+        f"    {RENDER_CFG_B64}",
         "  >",
         "  LOCK 1",
         "  GLOBAL_AUTO -1",
@@ -269,7 +283,7 @@ def write_project(song: Song, parts: list[RenderPart], out_path: Path) -> None:
         "  MASTERTRACKVIEW 0 0.6667 0.5 0.5 0 0 0 0 0 0 0 0 0 0 1",
         "  MASTERHWOUT 0 0 1 0 0 0 0 -1",
         "  MASTER_NCH 2 2",
-        "  MASTER_VOLUME 1 0 -1 -1 1",
+        f"  MASTER_VOLUME {MASTER_VOLUME_GAIN} 0 -1 -1 1",
         "  MASTER_PANMODE 3",
         "  MASTER_FX 1",
         "  MASTER_SEL 0",

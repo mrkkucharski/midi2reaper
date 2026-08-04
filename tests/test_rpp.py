@@ -8,7 +8,16 @@ import pytest
 from midi2reaper import gm
 from midi2reaper.classify import chord_ratio, classify_role, coverage, is_vocal, onset_polyphony
 from midi2reaper.midiscan import Note, Segment
-from midi2reaper.rpp import B64_LINE_WIDTH, midi_events, sflt_chunk
+from midi2reaper.midiscan import Song, TempoMap
+from midi2reaper.rpp import (
+    B64_LINE_WIDTH,
+    MASTER_VOLUME_GAIN,
+    RENDER_CFG_B64,
+    RENDER_FMT_LINE,
+    midi_events,
+    sflt_chunk,
+    write_project,
+)
 
 
 def split_blocks(lines: list[str]) -> list[bytes]:
@@ -48,6 +57,45 @@ def test_no_block_ends_on_a_line_boundary(length):
     path = Path("/Users/Shared/Soundfonts/guitars/" + "x" * length + ".sf2")
     for block in split_blocks(sflt_chunk(path, 0, 0)):
         assert len(base64.b64encode(block)) % B64_LINE_WIDTH != 0
+
+
+def _empty_song(tmp_path):
+    ppq = 480
+    return Song(
+        path=tmp_path / "song.mid",
+        ppq=ppq,
+        tempo_map=TempoMap(ppq=ppq, changes=[]),
+        time_signature=(4, 4),
+        tracks=[],
+        length_seconds=1.0,
+    )
+
+
+def test_project_defaults_match_tuned_render_settings(tmp_path):
+    """Californication was tuned by ear to -6.15 dB / mono / 16-bit and that
+    setting applied to every other project by hand; new projects must not need
+    the same manual edit again."""
+    out = tmp_path / "out.RPP"
+    write_project(_empty_song(tmp_path), [], out)
+    text = out.read_text(encoding="utf-8")
+
+    assert f"  MASTER_VOLUME {MASTER_VOLUME_GAIN} 0 -1 -1 1" in text
+    assert RENDER_FMT_LINE in text
+    assert f"    {RENDER_CFG_B64}" in text
+
+
+def test_render_cfg_default_does_not_touch_record_cfg(tmp_path):
+    """RECORD_CFG governs live recording, not rendering, and was never part of
+    what was tuned; only the RENDER_CFG blob should change."""
+    out = tmp_path / "out.RPP"
+    write_project(_empty_song(tmp_path), [], out)
+    text = out.read_text(encoding="utf-8")
+
+    record_line = next(l for l in text.split("\n") if l.strip().startswith("<RECORD_CFG"))
+    record_index = text.split("\n").index(record_line)
+    record_blob = text.split("\n")[record_index + 1].strip()
+    assert record_blob == "ZXZhdxgAAQ=="
+    assert record_blob != RENDER_CFG_B64
 
 
 def test_midi_events_use_deltas_and_close_notes():
