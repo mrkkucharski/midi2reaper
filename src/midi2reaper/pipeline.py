@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import classify, gm
+from .chains import ChainLibrary
 from .match import Match, match_program
 from .midiscan import Note, Song, scan
 from .rpp import RenderPart
@@ -52,7 +53,12 @@ class _Candidate:
     role: classify.Role | None
 
 
-def build(path: Path, library: Library, min_score: float) -> BuildResult:
+def build(
+    path: Path,
+    library: Library,
+    min_score: float,
+    chains: "ChainLibrary | None" = None,
+) -> BuildResult:
     song = scan(path)
     result = BuildResult(song=song)
     candidates: list[_Candidate] = []
@@ -100,11 +106,16 @@ def build(path: Path, library: Library, min_score: float) -> BuildResult:
         result.rejection = "no guitar part: DATA_CONTRACT.md requires a guitar to anchor the example"
         return result
 
-    _merge_into(result, candidates, song)
+    _merge_into(result, candidates, song, chains)
     return result
 
 
-def _merge_into(result: BuildResult, candidates: list[_Candidate], song: Song) -> None:
+def _merge_into(
+    result: BuildResult,
+    candidates: list[_Candidate],
+    song: Song,
+    chains: ChainLibrary | None = None,
+) -> None:
     """Collapse candidates sharing a `(program, rhythm)` pair into one part.
 
     For everything but guitars `rhythm` is None, so the pair degenerates to the
@@ -126,6 +137,9 @@ def _merge_into(result: BuildResult, candidates: list[_Candidate], song: Song) -
         vocal = any(m.vocal for m in members)
         sources = [m.source_name for m in members]
 
+        found_chain = chains.resolve(track_name) if chains else None
+        chain_key, chain_lines = found_chain if found_chain else (None, None)
+
         result.parts.append(
             RenderPart(
                 track_name=track_name,
@@ -136,6 +150,8 @@ def _merge_into(result: BuildResult, candidates: list[_Candidate], song: Song) -
                 patch=best.match.patch,
                 is_drum=is_drum,
                 vocal_substitution=vocal,
+                chain=chain_lines,
+                chain_key=chain_key,
             )
         )
         result.manifest_parts.append(
@@ -157,5 +173,7 @@ def _merge_into(result: BuildResult, candidates: list[_Candidate], song: Song) -
                 "role_annotation_note": best.role.note if best.role else None,
                 "role_mixed": best.role.mixed if best.role else False,
                 "vocal_substitution": vocal,
+                "chain": chain_key,
+                "instrument": "chain:" + chain_key if chain_key else "sflt",
             }
         )

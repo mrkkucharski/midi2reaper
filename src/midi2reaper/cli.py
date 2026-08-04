@@ -7,6 +7,7 @@ import json
 import sys
 from pathlib import Path
 
+from .chains import DEFAULT_LIBRARY as DEFAULT_CHAINS, ChainLibrary, extract_from_project
 from .match import DEFAULT_MIN_SCORE
 from .pipeline import build
 from .sf2 import index_library
@@ -26,6 +27,11 @@ def main(argv: list[str] | None = None) -> int:
     build_cmd.add_argument("--min-score", type=float, default=DEFAULT_MIN_SCORE)
     build_cmd.add_argument("--report", type=Path, help="write a JSON report of every decision")
     build_cmd.add_argument("--refresh-index", action="store_true", help="rebuild the library cache")
+    build_cmd.add_argument("--chains", type=Path, default=DEFAULT_CHAINS,
+                           help="FX chain library to splice instruments from")
+    build_cmd.add_argument("--no-chains", action="store_true", help="always use SFLT")
+    build_cmd.add_argument("-f", "--force", action="store_true",
+                           help="overwrite projects that already exist")
 
     index_cmd = sub.add_parser("index", help="index the soundfont library and report coverage")
     index_cmd.add_argument("--library", type=Path, default=DEFAULT_LIBRARY)
@@ -34,12 +40,72 @@ def main(argv: list[str] | None = None) -> int:
     check_cmd = sub.add_parser("validate", help="check generated projects load a real preset")
     check_cmd.add_argument("projects", nargs="+", type=Path, help="RPP files or directories")
 
+    chain_cmd = sub.add_parser("chains", help="manage the FX chain library")
+    chain_sub = chain_cmd.add_subparsers(dest="chain_command", required=True)
+
+    extract_cmd = chain_sub.add_parser("extract", help="harvest chains from tuned projects")
+    extract_cmd.add_argument("projects", nargs="+", type=Path)
+    extract_cmd.add_argument("--chains", type=Path, default=DEFAULT_CHAINS)
+    extract_cmd.add_argument("--keep-existing", action="store_true",
+                             help="do not replace chains already in the library")
+    extract_cmd.add_argument("--keep-sflt", action="store_true",
+                             help="retain SFLT instances instead of dropping them")
+
+    list_cmd = chain_sub.add_parser("list", help="show the chain library")
+    list_cmd.add_argument("--chains", type=Path, default=DEFAULT_CHAINS)
+
+    alias_cmd = chain_sub.add_parser(
+        "alias", help="reuse a chain under another key, e.g. @bass or @guitar")
+    alias_cmd.add_argument("key", help="new key, such as @bass")
+    alias_cmd.add_argument("source", help="existing key to point at")
+    alias_cmd.add_argument("--chains", type=Path, default=DEFAULT_CHAINS)
+
     args = parser.parse_args(argv)
     if args.command == "index":
         return _index(args)
     if args.command == "validate":
         return _validate(args)
+    if args.command == "chains":
+        return _chains(args)
     return _build(args)
+
+
+def _chains(args: argparse.Namespace) -> int:
+    library = ChainLibrary(args.chains)
+    if args.chain_command == "list":
+        if not library:
+            print(f"no chains in {args.chains}")
+            return 0
+        print(f"{len(library)} chain(s) in {args.chains}\n")
+        for key in library.keys():
+            entry = library.index[key]
+            print(f"  {key:<32} {' -> '.join(entry['plugins'])}")
+            origin = (f"alias of {entry['aliased_from']}" if "aliased_from" in entry
+                      else f"from {entry['source_project']} ({entry['extracted_at']})")
+            print(f"  {'':<32} {origin}")
+        return 0
+
+    if args.chain_command == "alias":
+        if not library.alias(args.key, args.source):
+            print(f"no chain named {args.source}", file=sys.stderr)
+            return 2
+        library.save()
+        print(f"{args.key} -> {args.source}")
+        return 0
+
+    projects: list[Path] = []
+    for item in args.projects:
+        projects += sorted(item.rglob("*.RPP")) if item.is_dir() else [item]
+
+    total = 0
+    for path in projects:
+        for chain in extract_from_project(path, drop_sflt=not args.keep_sflt):
+            action = library.add(chain, replace=not args.keep_existing)
+            total += action != "kept"
+            print(f"{action:<8} {chain.key:<32} {' -> '.join(chain.plugins)}  [{path.name}]")
+    library.save()
+    print(f"\n{total} chain(s) written; library now holds {len(library)} at {args.chains}")
+    return 0
 
 
 def _validate(args: argparse.Namespace) -> int:
@@ -90,16 +156,27 @@ def _build(args: argparse.Namespace) -> int:
         print(f"no soundfonts under {args.library}", file=sys.stderr)
         return 2
 
+    chains = None if args.no_chains else ChainLibrary(args.chains)
+    if chains and len(chains):
+        print(f"using {len(chains)} chain(s) from {args.chains}\n")
+
     report = []
-    accepted = 0
+    accepted = skipped_existing = 0
     for path in _collect(args.inputs):
-        result = build(path, library, args.min_score)
+        out_path = args.out / f"{path.stem}.RPP"
+        # Generated projects get hand-tuned in REAPER, so overwriting one is
+        # destructive in a way rebuilding a fresh project is not.
+        if out_path.exists() and not args.force:
+            print(f"EXISTS  {out_path.name} — not overwritten (pass --force)")
+            skipped_existing += 1
+            continue
+
+        result = build(path, library, args.min_score, chains)
         if not result.accepted:
             print(f"REJECT  {path.name}: {result.rejection}")
             report.append({"source": str(path), "rejected": result.rejection})
             continue
 
-        out_path = args.out / f"{path.stem}.RPP"
         from .rpp import write_project
 
         write_project(result.song, result.parts, out_path)
@@ -107,8 +184,9 @@ def _build(args: argparse.Namespace) -> int:
         print(f"OK      {path.name} -> {out_path.name} ({len(result.parts)} parts, "
               f"{len(result.skipped)} skipped)")
         for part, meta in zip(result.parts, result.manifest_parts):
-            print(f"          {part.track_name:<34} {meta['soundfont']} "
-                  f"(bank {meta['bank']} patch {meta['patch']})")
+            source = (f"chain:{meta['chain']}" if meta["chain"]
+                      else f"{meta['soundfont']} (bank {meta['bank']} patch {meta['patch']})")
+            print(f"          {part.track_name:<34} {source}")
         for skip in result.skipped:
             print(f"          skipped: {skip.name} — {skip.reason}")
 
@@ -126,7 +204,8 @@ def _build(args: argparse.Namespace) -> int:
         args.report.write_text(json.dumps(report, indent=2))
         print(f"\nreport written to {args.report}")
 
-    print(f"\n{accepted} project(s) written to {args.out}")
+    print(f"\n{accepted} project(s) written to {args.out}"
+          + (f", {skipped_existing} left untouched" if skipped_existing else ""))
     return 0
 
 

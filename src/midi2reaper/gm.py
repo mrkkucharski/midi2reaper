@@ -69,8 +69,24 @@ _CATEGORY_RANGES: list[tuple[range, tuple[str, ...]]] = [
 ]
 
 
+# The General MIDI families, in program order. Used to let one harvested FX
+# chain cover a whole instrument family: Ample Bass suits every bass program,
+# not only the finger bass it happened to be captured under.
+FAMILIES = [
+    "piano", "chromatic", "organ", "guitar", "bass", "strings", "ensemble",
+    "brass", "reed", "pipe", "synth-lead", "synth-pad", "synth-effects",
+    "ethnic", "percussive", "sound-effects",
+]
+
+
 def program_name(program: int) -> str:
     return PROGRAM_NAMES[program]
+
+
+def family_of(program: int | None, is_drum: bool = False) -> str:
+    if is_drum or program is None:
+        return DRUM_SLUG
+    return FAMILIES[program // 8]
 
 
 def slug(text: str) -> str:

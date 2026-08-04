@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 
+from .chains import freshen_ids
 from .midiscan import Note, Song
 
 VST_LINE = (
@@ -47,6 +48,9 @@ class RenderPart:
     patch: int
     is_drum: bool
     vocal_substitution: bool = False
+    # A harvested FX chain, spliced in place of the SFLT fallback.
+    chain: list[str] | None = None
+    chain_key: str | None = None
 
     @property
     def display_name(self) -> str:
@@ -141,18 +145,25 @@ def _track_block(part: RenderPart, song: Song, length: float) -> list[str]:
         "    MIDIOUT -1",
         "    MAINSEND 1 0",
         "    <FXCHAIN",
-        "      SHOW 0",
-        "      LASTSEL 0",
-        "      DOCKED 0",
-        "      BYPASS 0 0 0",
-        f"      {VST_LINE}",
     ]
-    out += [f"        {line}" for line in sflt_chunk(part.soundfont_path, part.bank, part.patch)]
+    if part.chain is not None:
+        out += freshen_ids(part.chain)
+    else:
+        out += [
+            "      SHOW 0",
+            "      LASTSEL 0",
+            "      DOCKED 0",
+            "      BYPASS 0 0 0",
+            f"      {VST_LINE}",
+        ]
+        out += [f"        {line}" for line in sflt_chunk(part.soundfont_path, part.bank, part.patch)]
+        out += [
+            "      >",
+            "      FLOATPOS 0 0 0 0",
+            f"      FXID {fx_id}",
+            "      WAK 0 0",
+        ]
     out += [
-        "      >",
-        "      FLOATPOS 0 0 0 0",
-        f"      FXID {fx_id}",
-        "      WAK 0 0",
         "    >",
         "    <ITEM",
         "      POSITION 0",

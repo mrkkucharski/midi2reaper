@@ -1,8 +1,10 @@
 # midi2reaper
 
-Turns multi-track MIDI arrangements into REAPER projects where every part is
-loaded into its own [SFLT](https://estrobiologist.gumroad.com/p/sflt-beta-v0-10-released)
-SoundFont player instance, ready to audition.
+Turns multi-track MIDI arrangements into REAPER projects with an instrument
+loaded on every part, ready to audition. Parts use FX chains harvested from
+projects you have tuned by ear, falling back to the
+[SFLT](https://estrobiologist.gumroad.com/p/sflt-beta-v0-10-released) SoundFont
+player where no chain exists yet.
 
 It exists to build training data for the MT3 fine-tune in `../DATA_CONTRACT.md`,
 which this tool implements: guitar anchors corpus membership, vocals are
@@ -38,6 +40,10 @@ inside generated projects.
 ### 2. SFLT SoundFont player  [beta v0.10.0]
 
 <https://estrobiologist.gumroad.com/p/sflt-beta-v0-10-released> — free.
+
+Required only for the fallback instrument. Parts covered by a harvested chain do
+not use it, and the plugins those chains reference (Kontakt, Guitar Rig, Ample
+Bass and so on) are your own — this tool never installs or configures them.
 
 **The VST3 build is required.** Generated projects reference the VST3 class id
 `955354538{496D53464C54696E674F757442616279}`; the AU and CLAP builds will not
@@ -98,6 +104,55 @@ uv pip install --python .venv/bin/python -e .
 `build` writes one `.RPP` per accepted source file, plus a JSON report
 recording every match, its score and the evidence behind each rhythm/lead call.
 Open a project in REAPER and press play — no further setup is needed.
+
+**Existing projects are never overwritten** without `-f/--force`, because
+generated projects get hand-tuned and clobbering one loses that work.
+
+## Instrument chains
+
+SFLT gets a part audible; it does not get it sounding right. Once a part has a
+real instrument in REAPER, harvest that chain and every future project reuses
+it:
+
+```sh
+# tune a project in REAPER, then:
+.venv/bin/midi2reaper chains extract ../reaper/generated/*.RPP
+.venv/bin/midi2reaper chains list
+```
+
+The library **accumulates**, so overdriven guitar can be tuned in one song and
+piano in another and both land in your defaults. It lives in
+`~/.config/midi2reaper/chains` (override with `--chains`).
+
+Chains are copied verbatim: plugin order, opaque plugin state, bypass flags and
+any JS effects all live inside the `<FXCHAIN>` block, and these tracks are
+`NCHAN 2` with no routing, so the block transplants cleanly. Only `FXID`s are
+regenerated, so each spliced instance stays unique. SFLT is dropped on
+extraction — it is the fallback a chain exists to replace (`--keep-sflt` to
+retain it).
+
+### Which chain a part gets
+
+Most specific wins:
+
+1. the exact part name — `overdriven-guitar:rhythm`
+2. its bare program — `overdriven-guitar`
+3. its GM family alias — `@guitar`
+
+Family aliases matter because GM splits instruments finely: finger bass and pick
+bass are different programs but the same plugin. Create one with:
+
+```sh
+.venv/bin/midi2reaper chains alias @bass electric-bass-finger
+.venv/bin/midi2reaper chains alias @guitar overdriven-guitar
+```
+
+Note that `@guitar` spans programs 24–31, so it covers acoustic guitars too. If
+that is wrong for your rig, capture a chain under `acoustic-guitar-steel` — being
+more specific, it wins.
+
+Parts with no matching chain fall back to SFLT and soundfont matching, so the
+library can stay partial indefinitely. `--no-chains` ignores it entirely.
 
 Once the projects sound right, hand them to
 [`reaper2mt3`](../reaper2mt3) to render the corpus.
