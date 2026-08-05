@@ -187,6 +187,8 @@ def _build(args: argparse.Namespace) -> int:
             source = (f"chain:{meta['chain']}" if meta["chain"]
                       else f"{meta['soundfont']} (bank {meta['bank']} patch {meta['patch']})")
             print(f"          {part.track_name:<34} {source}")
+            if part.range_warning:
+                print(f"          WARN  {part.range_warning.detail}")
         for skip in result.skipped:
             print(f"          skipped: {skip.name} — {skip.reason}")
 

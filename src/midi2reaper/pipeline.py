@@ -15,6 +15,7 @@ from . import classify, gm
 from .chains import ChainLibrary
 from .match import Match, match_program
 from .midiscan import Note, Song, scan
+from .ranges import check_range
 from .rpp import RenderPart
 from .sf2 import Library
 
@@ -140,6 +141,8 @@ def _merge_into(
         found_chain = chains.resolve(track_name) if chains else None
         chain_key, chain_lines = found_chain if found_chain else (None, None)
 
+        range_warning = None if is_drum else check_range(track_name, notes, program)
+
         result.parts.append(
             RenderPart(
                 track_name=track_name,
@@ -152,6 +155,7 @@ def _merge_into(
                 vocal_substitution=vocal,
                 chain=chain_lines,
                 chain_key=chain_key,
+                range_warning=range_warning,
             )
         )
         result.manifest_parts.append(
@@ -175,5 +179,6 @@ def _merge_into(
                 "vocal_substitution": vocal,
                 "chain": chain_key,
                 "instrument": "chain:" + chain_key if chain_key else "sflt",
+                "range_warning": range_warning.to_dict() if range_warning else None,
             }
         )

@@ -27,6 +27,7 @@ from pathlib import Path
 
 from .chains import freshen_ids
 from .midiscan import Note, Song
+from .ranges import RangeWarning
 
 VST_LINE = (
     '<VST "VST3i: SFLT (ash taylor) (34 out)" SFLT.vst3 0 "" '
@@ -43,11 +44,18 @@ DRUM_CHANNEL = 9
 # Bit depth and channel count are stored in two places that must agree: the
 # plain-text RENDER_FMT line and an opaque base64 blob in RENDER_CFG. Decoding
 # the blob confirms what it encodes rather than assuming: it starts with the
-# ASCII fourcc "wave" reversed ("evaw"), followed by a little-endian bit-depth
-# field -- 0x18 (24) in REAPER's own default, 0x10 (16) here.
+# output format's ASCII fourcc reversed ("evaw" for "wave", "calf" for "flac"),
+# the same convention in both. WAV's blob is 7 bytes -- fourcc + a 2-byte
+# little-endian bit-depth field (0x18/24 in REAPER's own default, 0x10/16
+# here) + a 1-byte flag. FLAC's is a different shape, not just a longer
+# bit-depth field: fourcc + a 4-byte bit-depth field (0x10/16) + a 4-byte
+# compression-level field (5, REAPER's own FLAC default, unchanged here).
+# Confirmed against a real project (`The Police-Every Breath You Take-REV.RPP`)
+# resaved with the render format switched to FLAC in REAPER's own UI, not
+# guessed at.
 MASTER_VOLUME_GAIN = 0.31622776601684  # linear; -10 dB
 RENDER_FMT_LINE = "  RENDER_FMT 0 1 44100"  # channel field: 1 = mono
-RENDER_CFG_B64 = "ZXZhdxAAAQ=="  # 'evaw' + bit depth 0x0010 (16-bit) + flags
+RENDER_CFG_B64 = "Y2FsZhAAAAAFAAAA"  # 'calf' + 16-bit + compression level 5
 
 
 @dataclass
@@ -65,6 +73,7 @@ class RenderPart:
     # A harvested FX chain, spliced in place of the SFLT fallback.
     chain: list[str] | None = None
     chain_key: str | None = None
+    range_warning: RangeWarning | None = None
 
     @property
     def display_name(self) -> str:

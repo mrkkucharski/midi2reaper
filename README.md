@@ -211,18 +211,58 @@ best next candidate for a harvested chain.
 ## Project-wide render defaults
 
 Every generated project ships with master volume at **-10 dB**, and render
-format **mono / 16-bit** -- tuned by ear once in Californication, then applied
-to every other project by hand. New projects need neither edit again.
+format **mono / 16-bit FLAC** -- tuned by ear once in Californication (WAV,
+superseded), FLAC adopted afterward when tuned in "Every Breath You Take" --
+applied to every other project by hand. New projects need neither edit again.
 
 Bit depth and channel count are stored in two places that must agree: the
 plain-text `RENDER_FMT` line and an opaque base64 blob in `RENDER_CFG`
-(`src/midi2reaper/rpp.py`). The blob was decoded rather than guessed at: it
-starts with the ASCII fourcc `wave` reversed, followed by a little-endian
-bit-depth field. `RECORD_CFG`, which governs live recording rather than
-rendering, is untouched.
+(`src/midi2reaper/rpp.py`). Both blobs were decoded rather than guessed at,
+confirmed against real projects resaved in REAPER's own UI after the setting
+was changed: the format's ASCII fourcc reversed (`evaw`/wave, `calf`/flac),
+followed by a bit-depth field -- 2 bytes for WAV, 4 for FLAC, not the same
+shape -- and, for FLAC only, a 4-byte compression-level field (5, REAPER's
+own default, left unchanged). `RECORD_CFG`, which governs live recording
+rather than rendering, is untouched.
+
+**This does not change what the rest of the pipeline expects.**
+`reaper2mt3 import` pairs `<name>.RPP` with `<name>.wav` specifically
+(`rpp.with_suffix(".wav")`) and `DATA_CONTRACT.md`'s check 6 validates WAV
+format directly -- a FLAC render won't be picked up as-is. Either render to
+WAV for projects headed into the corpus (override the format back in
+REAPER's render dialog before rendering), or update `reaper2mt3` to accept
+`.flac` too; nothing on that side has been touched yet.
 
 To change the defaults, edit `MASTER_VOLUME_GAIN`, `RENDER_FMT_LINE` and
 `RENDER_CFG_B64` at the top of `rpp.py`.
+
+## Instrument range warnings
+
+Each part's notes are checked against its GM program's typical playable
+register (`src/midi2reaper/ranges.py`), printed as a `WARN` line under the
+part during `build` and recorded per-part in `report.json` as
+`range_warning` (`null` when nothing fired):
+
+```
+OK      Song.mid -> Song.RPP (5 parts, 0 skipped)
+          electric-guitar-muted:rhythm       chain:@guitar
+          WARN  196 note(s) below D2 (lowest G1)
+          ...
+```
+
+This is **not** `DATA_CONTRACT.md`'s hard MIDI 21–108 boundary — that is
+enforced downstream by `reaper2mt3` and is a rejection. This is narrower and
+softer, and never blocks a build. Guitar's bound (D2–G6, MIDI 38–91) matches
+what `DATA_CONTRACT.md` itself used before being widened to today's blanket
+21–108; every other family's bound is a generous approximation from standard
+orchestration ranges, deliberately loose rather than precise — a warning that
+never fires is safer than one that nags on every legitimate low or high note.
+
+A warning is a prompt to listen, not a defect: a "bass" line that's really a
+guitar through an octave pedal, a down-tuned or extended-range instrument, and
+a solo pushed to the top of the neck all legitimately trip it. "Seven Nation
+Army"'s `"Bass"` track — a guitar an octave pedal drops below what any guitar
+can play unprocessed — is the motivating case; see `PROJECT_LOG.md`.
 
 ## How it works
 
