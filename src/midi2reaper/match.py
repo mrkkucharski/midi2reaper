@@ -43,6 +43,35 @@ _FAMILY_NEGATIVES: list[tuple[range, set[str]]] = [
     (range(0, 8), {"bass"}),
 ]
 
+# Soundfonts chosen by ear rather than left to the scored search below: either
+# the scoring picks a worse-sounding file for this program, or (as with the
+# Hammond) the file has only one undifferentiated preset that generic
+# category/keyword scoring has no reason to prefer. A pin wins outright and
+# skips scoring entirely.
+_PINNED: dict[int, tuple[str, int, int]] = {
+    16: ("organs/137_Hammond_B3_88006000_Slow_Leslie.sf2", 0, 0),  # Drawbar Organ
+    18: ("organs/137_Hammond_B3_88006000_Slow_Leslie.sf2", 0, 0),  # Rock Organ
+    42: ("strings/cello1.SF2", 0, 1),  # Cello
+}
+
+
+def _pinned_match(program: int, library: Library) -> Match | None:
+    pin = _PINNED.get(program)
+    if pin is None:
+        return None
+    rel_path, bank, patch = pin
+    for soundfont in library.soundfonts:
+        if soundfont.rel_path != rel_path:
+            continue
+        for preset in soundfont.presets:
+            if preset.bank == bank and preset.patch == patch:
+                return Match(
+                    soundfont, bank, patch, preset.name,
+                    score=float("inf"),
+                    reasons=[f"pinned default for {gm.program_name(program)}"],
+                )
+    return None
+
 _TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
 _STOPWORDS = {"the", "and", "of", "a", "sf2", "sf3", "kb", "mb", "v1", "v2", ""}
 
@@ -92,6 +121,10 @@ def match_program(
     """Best preset for the part, or None if nothing clears `min_score`."""
     if is_drum:
         return _match_drums(library, source_name)
+
+    pinned = _pinned_match(program, library)
+    if pinned is not None:
+        return pinned
 
     categories = gm.preferred_categories(program)
     wanted = _wanted_tokens(program)
