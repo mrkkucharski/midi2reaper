@@ -161,30 +161,41 @@ Once the projects sound right, hand them to
 
 The library itself lives outside this repo, at `~/.config/midi2reaper/chains`,
 and accumulates as more songs get tuned — this is a snapshot taken
-2026-08-04, not a tracked file. Regenerate it anytime with
+2026-08-06, not a tracked file. Regenerate it anytime with
 `midi2reaper chains list`.
 
-| Part | Chain |
-| --- | --- |
-| `acoustic-grand-piano` | Kontakt 8 |
-| `acoustic-guitar-nylon`, `:rhythm` | Kontakt 8 |
-| `acoustic-guitar-steel`, `:rhythm` | Ample Guitar M II Lite |
-| `distortion-guitar` | Kontakt 8 → Guitar Rig 7 |
-| `drums` | Kontakt 8 |
-| `electric-bass-finger` | midi/midi_transpose → Ample Bass P Lite |
-| `electric-bass-pick` | midi/midi_transpose → Ample Bass P Lite |
-| `electric-grand-piano` | Kontakt 8 |
-| `electric-guitar-clean`, `:rhythm` | Kontakt 8 → Guitar Rig 7 |
-| `electric-guitar-jazz`, `:rhythm` | Kontakt 8 → Guitar Rig 7 |
-| `fretless-bass` | midi/midi_transpose → Ample Bass P Lite |
-| `overdriven-guitar`, `:rhythm` | Kontakt 8 → Guitar Rig 7 |
-| `tenor-sax` | Kontakt 8 |
+| Part | Chain | Preset |
+| --- | --- | --- |
+| `acoustic-grand-piano` | Kontakt 8 | — |
+| `acoustic-guitar-nylon`, `:rhythm` | Kontakt 8 | — |
+| `acoustic-guitar-steel`, `:rhythm` | Ample Guitar M II Lite | — |
+| `distortion-guitar` | Ample Guitar LP | `Default_Distortion` |
+| `distortion-guitar:rhythm` | Ample Guitar LP | `Default_Distortion_Rhythm` |
+| `drums` | Kontakt 8 | — |
+| `electric-bass-finger` | midi/midi_transpose → Ample Bass P Lite | — |
+| `electric-bass-pick` | midi/midi_transpose → Ample Bass P Lite | — |
+| `electric-grand-piano` | Kontakt 8 | — |
+| `electric-guitar-clean` | Ample Guitar LP | `Default_Clean` |
+| `electric-guitar-jazz` | Ample Guitar LP | `Default` |
+| `electric-guitar-muted` | Ample Guitar LP | `Default_Clean` |
+| `fretless-bass` | midi/midi_transpose → Ample Bass P Lite | — |
+| `overdriven-guitar` | Ample Guitar LP | `Default_Overdrive` |
 
 Family aliases: `@bass` → `electric-bass-finger`, `@guitar` → `overdriven-guitar`.
 
+Every electric/distortion/overdrive guitar program now shares the same
+plugin (Ample Guitar LP) but is disambiguated by preset, not just plugin
+choice — `distortion-guitar` and `distortion-guitar:rhythm` in particular
+carry two deliberately different presets (a plain lead tone vs. one tuned for
+rhythm/chord work), harvested from `Metallica-Enter Sandman-07-28-2026.RPP`.
+Since chain resolution matches on the exact part name first (see "Which
+chain a part gets" above), a track named `distortion-guitar:rhythm` gets the
+rhythm-tuned preset automatically in every project built from here on; no
+further wiring needed for that.
+
 **External plugin dependencies** — installed and configured by you, this tool
-only references them: Kontakt 8, Guitar Rig 7 (Native Instruments), Ample Bass
-P Lite, Ample Guitar M II Lite (Ample Sound), and REAPER's bundled
+only references them: Kontakt 8 (Native Instruments), Ample Guitar LP, Ample
+Guitar M II Lite, Ample Bass P Lite (Ample Sound), and REAPER's bundled
 `midi/midi_transpose` JS effect.
 
 **Still on SFLT/soundfont fallback**, no chain harvested yet — mostly
