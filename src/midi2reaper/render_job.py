@@ -21,6 +21,7 @@ from .sf2 import Library, Preset, SoundFont
 JOB_SCHEMA = "midi2reaper.render-job/v1"
 LIBRARY_SCHEMA = "midi2reaper.library-manifest/v1"
 RESULT_SCHEMA = "midi2reaper.build-result/v1"
+SFLT_TEMPLATE = "midi2reaper/sflt-v1"
 
 
 class JobError(ValueError):
@@ -136,6 +137,8 @@ def run(job_path: Path, out: Path, result_path: Path, *, force: bool = False) ->
         raise JobError(f"{job_path}: schema_version must be {JOB_SCHEMA!r}")
     job_id = _required_string(job, "job_id", job_path)
     template_id = _required_string(job, "template_id", job_path)
+    if template_id != SFLT_TEMPLATE:
+        raise JobError(f"{job_path}: unsupported template_id {template_id!r}; expected {SFLT_TEMPLATE!r}")
     procgen_commit = _required_string(job, "procgen_commit", job_path)
     midi = (job_path.parent / _required_string(job, "renderer_midi", job_path)).resolve()
     manifest_path = (job_path.parent / _required_string(job, "library_manifest", job_path)).resolve()

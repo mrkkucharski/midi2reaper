@@ -117,7 +117,8 @@ midi2reaper render-job --job render_job.json -o project.RPP --result build_resul
 ```
 
 `render_job.json` has `schema_version` `"midi2reaper.render-job/v1"` and
-contains `job_id`, `procgen_commit`, `renderer_midi`, `template_id`, a
+contains `job_id`, `procgen_commit`, `renderer_midi`, template ID
+`midi2reaper/sflt-v1`, a
 `part_profiles` mapping from canonical part name to profile id, and a
 `library_manifest`. The library manifest has schema version
 `"midi2reaper.library-manifest/v1"`; each named `sflt` or `chain` profile

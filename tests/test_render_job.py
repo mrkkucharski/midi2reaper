@@ -40,7 +40,7 @@ def test_render_job_is_byte_deterministic_and_reports_schema(tmp_path):
         "job_id": "test-job",
         "procgen_commit": "0123456789abcdef",
         "renderer_midi": "renderer.mid",
-        "template_id": "sflt-v1",
+        "template_id": "midi2reaper/sflt-v1",
         "library_manifest": "library.json",
         "part_profiles": {"electric-guitar-clean:rhythm": "guitar"},
     }))
@@ -67,7 +67,7 @@ def test_render_job_rejects_asset_checksum_mismatch(tmp_path):
     job = tmp_path / "job.json"
     job.write_text(json.dumps({
         "schema_version": "midi2reaper.render-job/v1", "job_id": "x", "procgen_commit": "test", "renderer_midi": "missing.mid",
-        "template_id": "x", "library_manifest": "library.json", "part_profiles": {"x": "p"},
+        "template_id": "midi2reaper/sflt-v1", "library_manifest": "library.json", "part_profiles": {"x": "p"},
     }))
     try:
         run(job, tmp_path / "x.RPP", tmp_path / "result.json")
