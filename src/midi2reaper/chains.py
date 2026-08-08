@@ -22,6 +22,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from . import gm
 
@@ -260,11 +261,12 @@ class ChainLibrary:
         (self.root / INDEX_NAME).write_text(json.dumps(self.index, indent=2, sort_keys=True))
 
 
-def freshen_ids(lines: list[str]) -> list[str]:
+def freshen_ids(lines: list[str], id_for: Callable[[], str] | None = None) -> list[str]:
     """Give every plugin in a spliced chain its own FXID.
 
     Copying a chain verbatim would otherwise repeat one plugin instance id
     across every track that uses it.
     """
-    return [_FXID.sub(lambda m: m.group(1) + "{" + str(uuid.uuid4()).upper() + "}", line)
+    make_id = id_for or (lambda: str(uuid.uuid4()).upper())
+    return [_FXID.sub(lambda m: m.group(1) + "{" + make_id() + "}", line)
             for line in lines]

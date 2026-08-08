@@ -1,235 +1,265 @@
-"""Versioned, deterministic renderer-job adapter.
+"""Versioned, reproducible renderer-job adapter.
 
-This path deliberately bypasses the interactive soundfont matcher and local
-chain library.  A job names every canonical part and a manifest pins the
-asset used for its profile, so the same JSON inputs always produce the same
-project bytes.
+This module deliberately delegates MIDI scanning and RPP serialization to the
+normal midi2reaper pipeline.  It only supplies a hermetic job boundary around
+those established operations.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-from collections import defaultdict
+import subprocess
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
 
 from . import gm
-from .midiscan import Note, scan
-from .rpp import RenderPart, write_project
+from .match import DEFAULT_MIN_SCORE
+from .pipeline import build
+from .sf2 import Library, Preset, SoundFont
 
-RENDER_JOB_SCHEMA = "midi2reaper.render-job/v1"
-LIBRARY_MANIFEST_SCHEMA = "midi2reaper.library-manifest/v1"
-BUILD_RESULT_SCHEMA = "midi2reaper.build-result/v1"
-BUILD_RESULT_VERSION = 1
-SUPPORTED_TEMPLATE = "midi2reaper/sflt-v1"
+JOB_SCHEMA = "midi2reaper.render-job/v1"
+LIBRARY_SCHEMA = "midi2reaper.library-manifest/v1"
+RESULT_SCHEMA = "midi2reaper.build-result/v1"
+SFLT_TEMPLATE = "midi2reaper/sflt-v1"
 
 
-def run(job_path: Path, out_path: Path, result_path: Path) -> dict[str, Any]:
-    """Build one deterministic RPP from a versioned renderer job.
+class JobError(ValueError):
+    """A job or its pinned asset manifest is invalid."""
 
-    ``renderer_tracks`` is optional and additive to the v1 contract.  When it
-    is absent every authoritative symbolic part receives its historical single
-    renderer track.  When entries are supplied for a part, they replace that
-    default with one or more non-symbolic aliases that share the same notes.
-    """
-    job = _load_object(job_path)
-    _validate_job(job)
-    manifest_path = _relative_path(job_path.parent, _string(job, "library_manifest"))
-    manifest = _load_object(manifest_path)
-    _validate_manifest(manifest)
-    profiles = _object(job, "part_profiles")
-    assets = _object(manifest, "assets")
-    resolved_assets = {
-        name: _asset(manifest_path.parent, profile_id, assets)
-        for name, profile_id in sorted(profiles.items())
-    }
 
-    song = scan(_relative_path(job_path.parent, _string(job, "renderer_midi")))
-    authoritative = _authoritative_parts(song, profiles)
-    routes = _routes(job, profiles)
-    render_parts: list[RenderPart] = []
-    built: list[dict[str, Any]] = []
-    for name in sorted(profiles):
-        notes, sources = authoritative[name]
-        profile_id = profiles[name]
-        asset = resolved_assets[name]
-        for route in routes[name]:
-            render_parts.append(
-                RenderPart(
-                    track_name=name,
-                    source_name=" + ".join(sources),
-                    notes=notes,
-                    soundfont_path=asset["path"],
-                    bank=asset["bank"],
-                    patch=asset["patch"],
-                    is_drum=name == gm.DRUM_SLUG,
-                    renderer_track_id=route["renderer_track_id"],
-                    authoritative_part=name,
-                    pan=route["pan"],
-                )
-            )
-            built.append(
-                {
-                    "renderer_track_id": route["renderer_track_id"],
-                    "renderer_label": route["renderer_track_id"],
-                    "authoritative_symbolic_part": name,
-                    "profile_id": profile_id,
-                    "pan": route["pan"],
-                    "note_count": len(notes),
-                }
-            )
+@dataclass(frozen=True)
+class Profile:
+    kind: str
+    soundfont: Path | None = None
+    bank: int | None = None
+    patch: int | None = None
+    chain: Path | None = None
 
-    canonical_job = json.dumps(job, sort_keys=True, separators=(",", ":")).encode()
-    write_project(song, render_parts, out_path, deterministic_seed=canonical_job)
+
+def _renderer_tracks(job: dict, assignments: dict[str, str], path: Path) -> dict[str, list[dict]]:
+    """Validate optional v1 fan-out entries, grouped by symbolic part."""
+    raw = job.get("renderer_tracks")
+    if raw is None:
+        return {}
+    if not isinstance(raw, list):
+        raise JobError(f"{path}: renderer_tracks must be a list")
+    grouped: dict[str, list[dict]] = {}
+    seen: set[str] = set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise JobError(f"{path}: renderer track entries must be objects")
+        part = _required_string(entry, "authoritative_part", path)
+        track_id = _required_string(entry, "renderer_track_id", path)
+        pan = entry.get("pan", 0.0)
+        if part not in assignments:
+            raise JobError(f"{path}: renderer track references unknown part {part!r}")
+        if track_id in assignments or track_id in seen:
+            raise JobError(f"{path}: renderer_track_id must be a unique non-symbolic alias")
+        if not isinstance(pan, (int, float)) or isinstance(pan, bool) or not -1 <= pan <= 1:
+            raise JobError(f"{path}: renderer track pan must be a number in [-1, 1]")
+        seen.add(track_id)
+        grouped.setdefault(part, []).append({"renderer_track_id": track_id, "pan": float(pan)})
+    return grouped
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise JobError(f"cannot read JSON {path}: {error}") from error
+    if not isinstance(value, dict):
+        raise JobError(f"{path} must contain a JSON object")
+    return value
+
+
+def _required_string(value: dict, key: str, source: Path) -> str:
+    item = value.get(key)
+    if not isinstance(item, str) or not item:
+        raise JobError(f"{source}: {key} must be a non-empty string")
+    return item
+
+
+def _verified_path(entry: dict, manifest: Path, label: str) -> Path:
+    raw = _required_string(entry, "path", manifest)
+    expected = _required_string(entry, "sha256", manifest).lower()
+    if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+        raise JobError(f"{manifest}: {label}.sha256 must be a SHA-256 digest")
+    path = (manifest.parent / raw).resolve()
+    try:
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as error:
+        raise JobError(f"{manifest}: cannot read pinned {label} {path}: {error}") from error
+    if actual != expected:
+        raise JobError(f"{manifest}: checksum mismatch for {label} {path}")
+    return path
+
+
+def _profiles(manifest: dict, path: Path) -> dict[str, Profile]:
+    if manifest.get("schema_version") != LIBRARY_SCHEMA:
+        raise JobError(f"{path}: schema_version must be {LIBRARY_SCHEMA!r}")
+    raw_profiles = manifest.get("profiles")
+    if not isinstance(raw_profiles, dict) or not raw_profiles:
+        raise JobError(f"{path}: profiles must be a non-empty object")
+    profiles: dict[str, Profile] = {}
+    for profile_id, entry in raw_profiles.items():
+        if not isinstance(profile_id, str) or not isinstance(entry, dict):
+            raise JobError(f"{path}: profile ids and values must be strings and objects")
+        kind = entry.get("kind")
+        if kind == "sflt":
+            soundfont = _verified_path(entry.get("soundfont", {}), path, f"profiles.{profile_id}.soundfont")
+            bank, patch = entry.get("bank"), entry.get("patch")
+            if not isinstance(bank, int) or not isinstance(patch, int):
+                raise JobError(f"{path}: SFLT profile {profile_id} needs integer bank and patch")
+            profiles[profile_id] = Profile(kind, soundfont=soundfont, bank=bank, patch=patch)
+        elif kind == "chain":
+            chain = _verified_path(entry.get("chain", {}), path, f"profiles.{profile_id}.chain")
+            profiles[profile_id] = Profile(kind, chain=chain)
+        else:
+            raise JobError(f"{path}: profile {profile_id} kind must be 'sflt' or 'chain'")
+    return profiles
+
+
+def _library_from_profiles(profiles: dict[str, Profile]) -> Library:
+    # The normal pipeline still classifies/merges the MIDI.  Profiles are then
+    # applied exactly below, so this in-memory index cannot introduce a local
+    # soundfont-library dependency.
+    soundfonts: dict[Path, tuple[int, int]] = {}
+    for profile in profiles.values():
+        if profile.soundfont and profile.soundfont not in soundfonts:
+            soundfonts[profile.soundfont] = (profile.bank or 0, profile.patch or 0)
+    if not soundfonts:
+        # Chain-only jobs need a harmless synthetic match to reach normal
+        # classification; no synthetic path ever reaches the emitted RPP.
+        placeholder = Path("/pinned/chain-only.sf2")
+        soundfonts[placeholder] = (0, 0)
+    # Supply each profile to all matcher categories. Selection is replaced by
+    # the explicit part profile after classification, so this is only a bridge
+    # through the existing, well-tested MIDI-to-part pipeline.
+    categories = {"drums"}
+    for program in range(128):
+        categories.update(gm.preferred_categories(program))
+    indexed = [
+        SoundFont(path, category, [Preset(bank, patch, "pinned")])
+        for path, (bank, patch) in soundfonts.items()
+        for category in sorted(categories)
+    ]
+    return Library(root=Path("/pinned"), soundfonts=indexed)
+
+
+def _commit() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=Path(__file__).parents[2], text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+
+
+def run(job_path: Path, out: Path, result_path: Path, *, force: bool = False) -> int:
+    """Build one hermetic job and write a versioned result. Returns a CLI status."""
+    job = _read_json(job_path)
+    if job.get("schema_version") != JOB_SCHEMA:
+        raise JobError(f"{job_path}: schema_version must be {JOB_SCHEMA!r}")
+    job_id = _required_string(job, "job_id", job_path)
+    template_id = _required_string(job, "template_id", job_path)
+    if template_id != SFLT_TEMPLATE:
+        raise JobError(f"{job_path}: unsupported template_id {template_id!r}; expected {SFLT_TEMPLATE!r}")
+    procgen_commit = _required_string(job, "procgen_commit", job_path)
+    midi = (job_path.parent / _required_string(job, "renderer_midi", job_path)).resolve()
+    manifest_path = (job_path.parent / _required_string(job, "library_manifest", job_path)).resolve()
+    assignments = job.get("part_profiles")
+    if not isinstance(assignments, dict) or not assignments or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in assignments.items()
+    ):
+        raise JobError(f"{job_path}: part_profiles must map canonical part names to profile ids")
+    routes = _renderer_tracks(job, assignments, job_path)
+    profiles = _profiles(_read_json(manifest_path), manifest_path)
+    unknown = sorted(set(assignments.values()) - set(profiles))
+    if unknown:
+        raise JobError(f"{job_path}: unknown profile ids: {', '.join(unknown)}")
+
     result = {
-        "schema_version": BUILD_RESULT_SCHEMA,
-        "version": BUILD_RESULT_VERSION,
-        "job_id": job["job_id"],
-        "template_id": job["template_id"],
-        "procgen_commit": job["procgen_commit"],
-        "midi2reaper_commit": job["midi2reaper_commit"],
-        "project": str(out_path),
-        "renderer_midi_sha256": _sha256(_relative_path(job_path.parent, job["renderer_midi"])),
-        "built": built,
+        "schema_version": RESULT_SCHEMA,
+        "version": 1,
+        "job_id": job_id,
+        "template_id": template_id,
+        "procgen_commit": procgen_commit,
+        "renderer_midi": str(midi),
+        "midi2reaper_commit": _commit(),
+        "status": "rejected",
+        "built": [],
         "skipped": [],
         "rejected": [],
     }
-    result_path.parent.mkdir(parents=True, exist_ok=True)
-    result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return result
+    if out.exists() and not force:
+        result["rejected"].append({"reason": f"output exists: {out}"})
+        _write_result(result_path, result)
+        return 1
 
+    built = build(midi, _library_from_profiles(profiles), min_score=0.0)
+    result["skipped"] = [{"name": item.name, "reason": item.reason} for item in built.skipped]
+    if not built.accepted:
+        result["rejected"].append({"reason": built.rejection})
+        _write_result(result_path, result)
+        return 1
 
-def rejection_result(reason: str) -> dict[str, Any]:
-    """Machine-readable result used when a job cannot be validated."""
-    return {
-        "schema_version": BUILD_RESULT_SCHEMA,
-        "version": BUILD_RESULT_VERSION,
-        "built": [],
-        "skipped": [],
-        "rejected": [{"reason": reason}],
-    }
+    actual_names = {part.track_name for part in built.parts}
+    if actual_names != set(assignments):
+        missing, extra = sorted(set(assignments) - actual_names), sorted(actual_names - set(assignments))
+        result["rejected"].append({"reason": "part_profiles must exactly cover built parts", "missing": missing, "extra": extra})
+        _write_result(result_path, result)
+        return 1
+    if built.skipped:
+        result["rejected"].append({"reason": "pinned profiles failed to resolve one or more MIDI tracks"})
+        _write_result(result_path, result)
+        return 1
 
+    for part, metadata in zip(built.parts, built.manifest_parts):
+        profile_id = assignments[part.track_name]
+        profile = profiles[profile_id]
+        metadata["profile"] = profile_id
+        if profile.kind == "sflt":
+            part.soundfont_path, part.bank, part.patch, part.chain, part.chain_key = (
+                profile.soundfont, profile.bank, profile.patch, None, None
+            )
+        else:
+            part.chain = profile.chain.read_text(encoding="utf-8").splitlines()
+            part.chain_key = profile_id
+            metadata["instrument"] = "chain:" + profile_id
+            metadata["chain"] = profile_id
 
-def _authoritative_parts(song: Any, profiles: dict[str, Any]) -> dict[str, tuple[list[Note], list[str]]]:
-    notes: dict[str, list[Note]] = defaultdict(list)
-    sources: dict[str, list[str]] = defaultdict(list)
-    unknown: list[str] = []
-    for track in song.tracks:
-        if not track.segments:
+    render_parts = []
+    rendered_metadata = []
+    aliases = []
+    for part, metadata in zip(built.parts, built.manifest_parts):
+        entries = routes.get(part.track_name)
+        if not entries:
+            render_parts.append(part)
+            rendered_metadata.append(metadata)
             continue
-        name = track.name
-        if name not in profiles:
-            unknown.append(name or f"track {track.index}")
-            continue
-        for segment in track.segments:
-            candidates = {
-                gm.track_name(segment.program, segment.is_drum, False),
-                gm.track_name(segment.program, segment.is_drum, True),
-            }
-            if name not in candidates:
-                raise ValueError(f"renderer MIDI track {name!r} does not match its GM program")
-            notes[name].extend(segment.notes)
-        sources[name].append(name)
-    if unknown:
-        raise ValueError("renderer MIDI contains unassigned part(s): " + ", ".join(sorted(unknown)))
-    missing = sorted(set(profiles) - set(notes))
-    if missing:
-        raise ValueError("renderer MIDI is missing assigned part(s): " + ", ".join(missing))
-    return {
-        name: (sorted(notes[name], key=lambda note: (note.start, note.end, note.pitch)), sources[name])
-        for name in profiles
-    }
+        for entry in entries:
+            render_parts.append(replace(part, renderer_track_id=entry["renderer_track_id"], pan=entry["pan"]))
+            rendered_metadata.append(dict(metadata, renderer_track_id=entry["renderer_track_id"], pan=entry["pan"]))
+            aliases.append({
+                "renderer_track_id": entry["renderer_track_id"],
+                "authoritative_symbolic_part": part.track_name,
+                "pan": entry["pan"],
+            })
+
+    from .rpp import write_project
+
+    seed = hashlib.sha256(json.dumps(job, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    write_project(built.song, render_parts, out, deterministic_seed=seed)
+    result["status"] = "built"
+    built_result = {"project": str(out), "sha256": hashlib.sha256(out.read_bytes()).hexdigest(), "parts": rendered_metadata}
+    if routes:
+        built_result["renderer_track_aliases"] = aliases
+    result["built"].append(built_result)
+    _write_result(result_path, result)
+    return 0
 
 
-def _routes(job: dict[str, Any], profiles: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    raw = job.get("renderer_tracks", [])
-    if not isinstance(raw, list):
-        raise TypeError("renderer_tracks must be a list")
-    routes: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    ids: set[str] = set()
-    for item in raw:
-        entry = _as_object(item)
-        part = _string(entry, "authoritative_part")
-        if part not in profiles:
-            raise ValueError(f"renderer track names unknown authoritative part {part!r}")
-        track_id = _string(entry, "renderer_track_id")
-        if track_id in ids:
-            raise ValueError(f"duplicate renderer_track_id {track_id!r}")
-        ids.add(track_id)
-        pan = entry.get("pan", 0.0)
-        if not isinstance(pan, (int, float)) or isinstance(pan, bool) or not -1 <= pan <= 1:
-            raise ValueError("renderer track pan must be a number in [-1, 1]")
-        routes[part].append({"renderer_track_id": track_id, "pan": float(pan)})
-    for part in profiles:
-        if not routes[part]:
-            routes[part].append({"renderer_track_id": part, "pan": 0.0})
-    return routes
-
-
-def _asset(root: Path, profile_id: Any, assets: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(profile_id, str) or not profile_id:
-        raise TypeError("part_profiles values must be non-empty strings")
-    entry = _as_object(assets.get(profile_id))
-    if entry.get("kind") != "sflt":
-        raise ValueError(f"profile {profile_id!r} is not an SFLT asset")
-    path = _relative_path(root, _string(entry, "path"))
-    expected = _string(entry, "sha256")
-    actual = _sha256(path)
-    if actual != expected:
-        raise ValueError(f"profile {profile_id!r} asset SHA-256 does not match its manifest")
-    bank, patch = entry.get("bank"), entry.get("patch")
-    if not isinstance(bank, int) or not isinstance(patch, int):
-        raise TypeError(f"profile {profile_id!r} bank and patch must be integers")
-    return {"path": path, "bank": bank, "patch": patch}
-
-
-def _validate_job(job: dict[str, Any]) -> None:
-    if job.get("schema_version") != RENDER_JOB_SCHEMA:
-        raise ValueError(f"unsupported renderer job schema {job.get('schema_version')!r}")
-    for key in ("job_id", "renderer_midi", "template_id", "procgen_commit", "midi2reaper_commit", "library_manifest"):
-        _string(job, key)
-    if job["template_id"] != SUPPORTED_TEMPLATE:
-        raise ValueError(f"unsupported template {job['template_id']!r}")
-    profiles = _object(job, "part_profiles")
-    if not profiles:
-        raise ValueError("part_profiles must not be empty")
-    for name, profile in profiles.items():
-        if not isinstance(name, str) or not name or not isinstance(profile, str) or not profile:
-            raise TypeError("part_profiles must map non-empty names to non-empty profile IDs")
-
-
-def _validate_manifest(manifest: dict[str, Any]) -> None:
-    if manifest.get("schema_version") != LIBRARY_MANIFEST_SCHEMA:
-        raise ValueError("unsupported library manifest schema")
-    _object(manifest, "assets")
-
-
-def _load_object(path: Path) -> dict[str, Any]:
-    return _as_object(json.loads(path.read_text(encoding="utf-8")))
-
-
-def _relative_path(root: Path, value: str) -> Path:
-    path = Path(value)
-    return path if path.is_absolute() else root / path
-
-
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def _object(raw: dict[str, Any], key: str) -> dict[str, Any]:
-    return _as_object(raw.get(key))
-
-
-def _as_object(raw: object) -> dict[str, Any]:
-    if not isinstance(raw, dict):
-        raise TypeError("expected an object")
-    return raw
-
-
-def _string(raw: dict[str, Any], key: str) -> str:
-    value = raw.get(key)
-    if not isinstance(value, str) or not value:
-        raise TypeError(f"{key} must be a non-empty string")
-    return value
+def _write_result(path: Path, result: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
