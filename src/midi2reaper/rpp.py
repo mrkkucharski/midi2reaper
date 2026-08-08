@@ -17,6 +17,7 @@ of 128.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import struct
 import time
@@ -88,6 +89,23 @@ def _guid() -> str:
     return "{" + str(uuid.uuid4()).upper() + "}"
 
 
+class DeterministicIds:
+    """Stable UUID-shaped ids derived from a renderer-job content hash."""
+
+    def __init__(self, seed: str):
+        self.seed = seed
+        self.counter = 0
+
+    def guid(self) -> str:
+        value = self.raw()
+        return "{" + value + "}"
+
+    def raw(self) -> str:
+        digest = hashlib.sha256(f"{self.seed}:{self.counter}".encode()).hexdigest()
+        self.counter += 1
+        return f"{digest[:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:32]}".upper()
+
+
 def _b64_lines(payload: bytes) -> list[str]:
     text = base64.b64encode(payload).decode()
     return [text[i : i + B64_LINE_WIDTH] for i in range(0, len(text), B64_LINE_WIDTH)]
@@ -141,8 +159,9 @@ def midi_events(notes: list[Note], is_drum: bool) -> list[str]:
     return lines
 
 
-def _track_block(part: RenderPart, song: Song, length: float) -> list[str]:
-    guid, track_id, fx_id, item_guid, iguid = (_guid() for _ in range(5))
+def _track_block(part: RenderPart, song: Song, length: float, ids: DeterministicIds | None = None) -> list[str]:
+    guid_fn = ids.guid if ids else _guid
+    guid, track_id, fx_id, item_guid, iguid = (guid_fn() for _ in range(5))
     out = [
         f"  <TRACK {guid}",
         f"    NAME {_quote(part.display_name)}",
@@ -170,7 +189,7 @@ def _track_block(part: RenderPart, song: Song, length: float) -> list[str]:
         "    <FXCHAIN",
     ]
     if part.chain is not None:
-        out += freshen_ids(part.chain)
+        out += freshen_ids(part.chain, ids.raw if ids else None)
     else:
         out += [
             "      SHOW 0",
@@ -223,13 +242,20 @@ def _quote(text: str) -> str:
     return '"' + text.replace('"', "'") + '"'
 
 
-def write_project(song: Song, parts: list[RenderPart], out_path: Path) -> None:
+def write_project(
+    song: Song, parts: list[RenderPart], out_path: Path, *, deterministic_seed: str | None = None,
+) -> None:
+    """Write a project.  A renderer job supplies ``deterministic_seed``.
+
+    The legacy CLI intentionally retains its historical random project ids.
+    """
+    ids = DeterministicIds(deterministic_seed) if deterministic_seed else None
     points = song.tempo_map.points or [(0.0, 120.0)]
     numerator, denominator = song.time_signature
     length = max(song.length_seconds, _last_note_seconds(song, parts)) + 1.0
 
     lines = [
-        f'<REAPER_PROJECT 0.1 "7.74/macOS-arm64" {int(time.time())} 0',
+        f'<REAPER_PROJECT 0.1 "7.74/macOS-arm64" {0 if ids else int(time.time())} 0',
         "  RIPPLE 0 0",
         "  GROUPOVERRIDE 0 0 0 0",
         "  AUTOXFADE 129",
@@ -300,14 +326,14 @@ def write_project(song: Song, parts: list[RenderPart], out_path: Path) -> None:
 
     if len(points) > 1:
         lines.append("  <TEMPOENVEX")
-        lines += [f"    EGUID {_guid()}", "    ACT 1 -1", "    VIS 1 0 1",
+        lines += [f"    EGUID {(ids.guid() if ids else _guid())}", "    ACT 1 -1", "    VIS 1 0 1",
                   "    LANEHEIGHT 0 0", "    ARM 0", "    DEFSHAPE 1 -1 -1"]
         lines += [f"    PT {seconds:.12f} {bpm:.10f} 1" for seconds, bpm in points]
         lines.append("  >")
 
     lines += ["  RULERHEIGHT 86 86", "  <PROJBAY", "  >"]
     for part in parts:
-        lines += _track_block(part, song, length)
+        lines += _track_block(part, song, length, ids)
     lines.append(">")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

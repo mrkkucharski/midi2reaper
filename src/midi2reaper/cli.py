@@ -33,6 +33,12 @@ def main(argv: list[str] | None = None) -> int:
     build_cmd.add_argument("-f", "--force", action="store_true",
                            help="overwrite projects that already exist")
 
+    job_cmd = sub.add_parser("render-job", help="build one deterministic, pinned renderer job")
+    job_cmd.add_argument("--job", required=True, type=Path, help="versioned render-job JSON")
+    job_cmd.add_argument("-o", "--out", required=True, type=Path, help="output RPP path")
+    job_cmd.add_argument("--result", required=True, type=Path, help="versioned build-result JSON")
+    job_cmd.add_argument("-f", "--force", action="store_true", help="overwrite an existing project")
+
     index_cmd = sub.add_parser("index", help="index the soundfont library and report coverage")
     index_cmd.add_argument("--library", type=Path, default=DEFAULT_LIBRARY)
     index_cmd.add_argument("--refresh-index", action="store_true")
@@ -67,6 +73,13 @@ def main(argv: list[str] | None = None) -> int:
         return _validate(args)
     if args.command == "chains":
         return _chains(args)
+    if args.command == "render-job":
+        from .render_job import JobError, run
+        try:
+            return run(args.job, args.out, args.result, force=args.force)
+        except JobError as error:
+            print(f"render-job rejected: {error}", file=sys.stderr)
+            return 2
     return _build(args)
 
 

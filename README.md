@@ -108,6 +108,29 @@ Open a project in REAPER and press play — no further setup is needed.
 **Existing projects are never overwritten** without `-f/--force`, because
 generated projects get hand-tuned and clobbering one loses that work.
 
+### Reproducible renderer jobs
+
+Automated corpus builds use the separate, fail-closed `render-job` command:
+
+```sh
+midi2reaper render-job --job render_job.json -o project.RPP --result build_result.json
+```
+
+`render_job.json` has `schema_version` `"midi2reaper.render-job/v1"` and
+contains `job_id`, `procgen_commit`, `renderer_midi`, `template_id`, a
+`part_profiles` mapping from canonical part name to profile id, and a
+`library_manifest`. The library manifest has schema version
+`"midi2reaper.library-manifest/v1"`; each named `sflt` or `chain` profile
+uses a relative asset path and its SHA-256. The adapter verifies every hash,
+never reads the normal soundfont index or `~/.config/midi2reaper/chains`, and
+requires the mapping to cover exactly the parts produced from the MIDI.
+
+The result always contains `schema_version`
+`"midi2reaper.build-result/v1"`, numeric `version: 1`, both producing commits,
+and `built`, `skipped`, and `rejected` arrays. Its generated RPP uses a hash of
+the canonical job JSON for every project/track/item/FX id and a zero project
+timestamp, so the same job and pinned assets produce byte-identical output.
+
 ## Instrument chains
 
 SFLT gets a part audible; it does not get it sounding right. Once a part has a

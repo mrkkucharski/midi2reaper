@@ -1,0 +1,77 @@
+import hashlib
+import json
+
+import mido
+
+from midi2reaper.render_job import RESULT_SCHEMA, run
+
+
+def _sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _midi(path):
+    midi = mido.MidiFile(ticks_per_beat=480)
+    track = mido.MidiTrack()
+    midi.tracks.append(track)
+    track.append(mido.MetaMessage("track_name", name="Rhythm Guitar", time=0))
+    track.append(mido.Message("program_change", program=27, time=0))
+    for beat in range(8):
+        for index, pitch in enumerate((52, 55, 59)):
+            track.append(mido.Message("note_on", note=pitch, velocity=96, time=0 if index else 480))
+        for index, pitch in enumerate((52, 55, 59)):
+            track.append(mido.Message("note_off", note=pitch, velocity=0, time=0 if index else 240))
+    midi.save(path)
+
+
+def test_render_job_is_byte_deterministic_and_reports_schema(tmp_path):
+    midi = tmp_path / "renderer.mid"
+    font = tmp_path / "clean.sf2"
+    _midi(midi)
+    font.write_bytes(b"pinned test soundfont")
+    library = tmp_path / "library.json"
+    library.write_text(json.dumps({
+        "schema_version": "midi2reaper.library-manifest/v1",
+        "profiles": {"guitar": {"kind": "sflt", "soundfont": {"path": "clean.sf2", "sha256": _sha(font)}, "bank": 0, "patch": 27}},
+    }))
+    job = tmp_path / "render_job.json"
+    job.write_text(json.dumps({
+        "schema_version": "midi2reaper.render-job/v1",
+        "job_id": "test-job",
+        "procgen_commit": "0123456789abcdef",
+        "renderer_midi": "renderer.mid",
+        "template_id": "sflt-v1",
+        "library_manifest": "library.json",
+        "part_profiles": {"electric-guitar-clean:rhythm": "guitar"},
+    }))
+
+    first, second = tmp_path / "one.RPP", tmp_path / "two.RPP"
+    assert run(job, first, tmp_path / "one-result.json") == 0
+    assert run(job, second, tmp_path / "two-result.json") == 0
+    assert first.read_bytes() == second.read_bytes()
+    result = json.loads((tmp_path / "one-result.json").read_text())
+    assert result["schema_version"] == RESULT_SCHEMA
+    assert result["version"] == 1
+    assert result["status"] == "built"
+    assert result["built"][0]["sha256"] == _sha(first)
+
+
+def test_render_job_rejects_asset_checksum_mismatch(tmp_path):
+    font = tmp_path / "font.sf2"
+    font.write_bytes(b"changed")
+    library = tmp_path / "library.json"
+    library.write_text(json.dumps({
+        "schema_version": "midi2reaper.library-manifest/v1",
+        "profiles": {"p": {"kind": "sflt", "soundfont": {"path": "font.sf2", "sha256": "0" * 64}, "bank": 0, "patch": 0}},
+    }))
+    job = tmp_path / "job.json"
+    job.write_text(json.dumps({
+        "schema_version": "midi2reaper.render-job/v1", "job_id": "x", "procgen_commit": "test", "renderer_midi": "missing.mid",
+        "template_id": "x", "library_manifest": "library.json", "part_profiles": {"x": "p"},
+    }))
+    try:
+        run(job, tmp_path / "x.RPP", tmp_path / "result.json")
+    except ValueError as error:
+        assert "checksum mismatch" in str(error)
+    else:
+        raise AssertionError("expected checksum rejection")
