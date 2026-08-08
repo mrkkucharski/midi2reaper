@@ -33,6 +33,13 @@ def main(argv: list[str] | None = None) -> int:
     build_cmd.add_argument("-f", "--force", action="store_true",
                            help="overwrite projects that already exist")
 
+    job_cmd = sub.add_parser(
+        "render-job", help="build a deterministic project from a versioned renderer job"
+    )
+    job_cmd.add_argument("--job", type=Path, required=True, help="renderer-job JSON document")
+    job_cmd.add_argument("-o", "--out", type=Path, required=True, help="output RPP path")
+    job_cmd.add_argument("--result", type=Path, required=True, help="build-result JSON path")
+
     index_cmd = sub.add_parser("index", help="index the soundfont library and report coverage")
     index_cmd.add_argument("--library", type=Path, default=DEFAULT_LIBRARY)
     index_cmd.add_argument("--refresh-index", action="store_true")
@@ -67,6 +74,8 @@ def main(argv: list[str] | None = None) -> int:
         return _validate(args)
     if args.command == "chains":
         return _chains(args)
+    if args.command == "render-job":
+        return _render_job(args)
     return _build(args)
 
 
@@ -123,6 +132,21 @@ def _validate(args: argparse.Namespace) -> int:
         print(problem)
     print(f"{len(projects)} project(s) checked, {len(problems)} problem(s)")
     return 1 if problems else 0
+
+
+def _render_job(args: argparse.Namespace) -> int:
+    from .render_job import rejection_result, run
+
+    try:
+        result = run(args.job, args.out, args.result)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        result = rejection_result(str(exc))
+        args.result.parent.mkdir(parents=True, exist_ok=True)
+        args.result.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(f"REJECT  {exc}", file=sys.stderr)
+        return 2
+    print(f"OK      {args.out} ({len(result['built'])} renderer track(s))")
+    return 0
 
 
 def _collect(inputs: list[Path]) -> list[Path]:

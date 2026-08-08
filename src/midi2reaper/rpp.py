@@ -17,6 +17,7 @@ of 128.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import struct
 import time
@@ -74,18 +75,43 @@ class RenderPart:
     chain: list[str] | None = None
     chain_key: str | None = None
     range_warning: RangeWarning | None = None
+    # Renderer jobs may fan one authoritative symbolic part out to several
+    # non-symbolic REAPER tracks.  The build-result sidecar owns the reverse
+    # mapping; these fields only control the project presentation.
+    renderer_track_id: str | None = None
+    authoritative_part: str | None = None
+    pan: float = 0.0
 
     @property
     def display_name(self) -> str:
         """Track label shown in REAPER: canonical name, source, and any substitution."""
-        label = f"{self.track_name} | {self.source_name}" if self.source_name else self.track_name
+        label = self.renderer_track_id or self.track_name
+        if self.source_name:
+            label += f" | {self.source_name}"
         if self.vocal_substitution:
             label += " [vocal→instrument]"
         return label
 
 
+class _GuidFactory:
+    """Generate UUID-shaped RPP identifiers, deterministically when seeded."""
+
+    def __init__(self, seed: bytes | None = None) -> None:
+        self.seed = seed
+        self.index = 0
+
+    def guid(self, label: str = "") -> str:
+        if self.seed is None:
+            return "{" + str(uuid.uuid4()).upper() + "}"
+        material = self.seed + b"\\0" + label.encode() + b"\\0" + str(self.index).encode()
+        self.index += 1
+        digest = hashlib.sha256(material).hexdigest()
+        return "{" + "-".join((digest[:8], digest[8:12], digest[12:16], digest[16:20], digest[20:32])).upper() + "}"
+
+
 def _guid() -> str:
-    return "{" + str(uuid.uuid4()).upper() + "}"
+    """Compatibility helper for callers that expect a fresh random identifier."""
+    return _GuidFactory().guid()
 
 
 def _b64_lines(payload: bytes) -> list[str]:
@@ -141,15 +167,16 @@ def midi_events(notes: list[Note], is_drum: bool) -> list[str]:
     return lines
 
 
-def _track_block(part: RenderPart, song: Song, length: float) -> list[str]:
-    guid, track_id, fx_id, item_guid, iguid = (_guid() for _ in range(5))
+def _track_block(part: RenderPart, song: Song, length: float, guids: _GuidFactory) -> list[str]:
+    label = part.renderer_track_id or part.track_name
+    guid, track_id, fx_id, item_guid, iguid = (guids.guid(label) for _ in range(5))
     out = [
         f"  <TRACK {guid}",
         f"    NAME {_quote(part.display_name)}",
         "    PEAKCOL 16576",
         "    BEAT -1",
         "    AUTOMODE 0",
-        "    VOLPAN 1 0 -1 -1 1",
+        f"    VOLPAN 1 {part.pan:.6f} -1 -1 1",
         "    MUTESOLO 0 0 0",
         "    IPHASE 0",
         "    PLAYOFFS 0 1",
@@ -223,13 +250,26 @@ def _quote(text: str) -> str:
     return '"' + text.replace('"', "'") + '"'
 
 
-def write_project(song: Song, parts: list[RenderPart], out_path: Path) -> None:
+def write_project(
+    song: Song,
+    parts: list[RenderPart],
+    out_path: Path,
+    *,
+    deterministic_seed: bytes | None = None,
+) -> None:
+    """Write an RPP project.
+
+    ``deterministic_seed`` is used by the renderer-job adapter.  Omitting it
+    retains the historical interactive-build behaviour of fresh UUIDs and a
+    current project timestamp.
+    """
+    guids = _GuidFactory(deterministic_seed)
     points = song.tempo_map.points or [(0.0, 120.0)]
     numerator, denominator = song.time_signature
     length = max(song.length_seconds, _last_note_seconds(song, parts)) + 1.0
 
     lines = [
-        f'<REAPER_PROJECT 0.1 "7.74/macOS-arm64" {int(time.time())} 0',
+        f'<REAPER_PROJECT 0.1 "7.74/macOS-arm64" {0 if deterministic_seed is not None else int(time.time())} 0',
         "  RIPPLE 0 0",
         "  GROUPOVERRIDE 0 0 0 0",
         "  AUTOXFADE 129",
@@ -300,14 +340,14 @@ def write_project(song: Song, parts: list[RenderPart], out_path: Path) -> None:
 
     if len(points) > 1:
         lines.append("  <TEMPOENVEX")
-        lines += [f"    EGUID {_guid()}", "    ACT 1 -1", "    VIS 1 0 1",
+        lines += [f"    EGUID {guids.guid('tempo')}", "    ACT 1 -1", "    VIS 1 0 1",
                   "    LANEHEIGHT 0 0", "    ARM 0", "    DEFSHAPE 1 -1 -1"]
         lines += [f"    PT {seconds:.12f} {bpm:.10f} 1" for seconds, bpm in points]
         lines.append("  >")
 
     lines += ["  RULERHEIGHT 86 86", "  <PROJBAY", "  >"]
     for part in parts:
-        lines += _track_block(part, song, length)
+        lines += _track_block(part, song, length, guids)
     lines.append(">")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
