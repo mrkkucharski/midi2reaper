@@ -14,7 +14,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from . import gm
-from .match import DEFAULT_MIN_SCORE
 from .pipeline import build
 from .sf2 import Library, Preset, SoundFont
 
@@ -197,7 +196,16 @@ def run(job_path: Path, out: Path, result_path: Path, *, force: bool = False) ->
         _write_result(result_path, result)
         return 1
 
-    built = build(midi, _library_from_profiles(profiles), min_score=0.0)
+    # Renderer MIDI is procgen's canonical symbolic export.  Its exact track
+    # names, including whether a guitar has the terminal ``:rhythm`` suffix,
+    # are the authority for this versioned job; generic MIDI role inference is
+    # intentionally reserved for the ordinary import path.
+    built = build(
+        midi,
+        _library_from_profiles(profiles),
+        min_score=0.0,
+        canonical_track_names=True,
+    )
     result["skipped"] = [{"name": item.name, "reason": item.reason} for item in built.skipped]
     if not built.accepted:
         result["rejected"].append({"reason": built.rejection})

@@ -134,3 +134,22 @@ def track_name(program: int | None, is_drum: bool, rhythm: bool | None) -> str:
     """
     part = DRUM_SLUG if is_drum else program_slug(program)
     return f"{part}:rhythm" if rhythm else part
+
+
+def parse_track_name(name: str) -> tuple[int | None, bool, bool | None] | None:
+    """Parse one exact canonical corpus track name.
+
+    This is deliberately stricter than the display-name handling used for
+    ordinary MIDI imports: versioned renderer jobs carry an authoritative
+    symbolic identity in the source MIDI itself, so a display suffix or an
+    inferred role must not silently change its label.
+    """
+    if name == DRUM_SLUG:
+        return None, True, None
+    for program in range(len(PROGRAM_NAMES)):
+        plain = program_slug(program)
+        if name == plain:
+            return program, False, None
+        if is_guitar(program) and name == f"{plain}:rhythm":
+            return program, False, True
+    return None
