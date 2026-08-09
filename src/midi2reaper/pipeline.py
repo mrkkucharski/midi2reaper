@@ -59,6 +59,8 @@ def build(
     library: Library,
     min_score: float,
     chains: "ChainLibrary | None" = None,
+    *,
+    canonical_track_names: bool = False,
 ) -> BuildResult:
     song = scan(path)
     result = BuildResult(song=song)
@@ -71,10 +73,19 @@ def build(
     for track in song.tracks:
         label = track.name or f"track {track.index}"
         vocal = classify.is_vocal(track.name)
+        canonical_identity = gm.parse_track_name(track.name) if canonical_track_names else None
 
         for segment in track.segments:
             if not segment.notes:
                 continue
+
+            if canonical_track_names and canonical_identity is not None:
+                declared_program, declared_drum, _declared_rhythm = canonical_identity
+                if (segment.program, segment.is_drum) != (declared_program or 0, declared_drum):
+                    result.rejection = (
+                        f"source track {label!r} identity does not match its MIDI program/channel"
+                    )
+                    return result
 
             program = segment.program
             substituted = False
@@ -88,13 +99,21 @@ def build(
                 )
                 continue
 
-            role = classify.classify_role(segment, song.ppq, song_ticks, track.name, vocal)
+            role = (
+                None
+                if canonical_track_names and canonical_identity is not None
+                else classify.classify_role(segment, song.ppq, song_ticks, track.name, vocal)
+            )
             candidates.append(
                 _Candidate(
                     program=program,
                     is_drum=segment.is_drum,
                     # `rhythm` is annotated or absent; there is no negative case.
-                    rhythm=True if (role and role.rhythm) else None,
+                    rhythm=(
+                        canonical_identity[2]
+                        if canonical_track_names and canonical_identity is not None
+                        else True if (role and role.rhythm) else None
+                    ),
                     notes=segment.notes,
                     match=found,
                     source_name=label,

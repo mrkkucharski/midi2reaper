@@ -24,6 +24,21 @@ def _midi(path):
     midi.save(path)
 
 
+def _canonical_lead_midi(path, name="overdriven-guitar"):
+    """Chordal notes must not override a canonical non-rhythm lead label."""
+    midi = mido.MidiFile(ticks_per_beat=480)
+    track = mido.MidiTrack()
+    midi.tracks.append(track)
+    track.append(mido.MetaMessage("track_name", name=name, time=0))
+    track.append(mido.Message("program_change", program=29, time=0))
+    for beat in range(8):
+        for index, pitch in enumerate((52, 55, 59)):
+            track.append(mido.Message("note_on", note=pitch, velocity=96, time=0 if index else 480))
+        for index, pitch in enumerate((52, 55, 59)):
+            track.append(mido.Message("note_off", note=pitch, velocity=0, time=0 if index else 240))
+    midi.save(path)
+
+
 def test_render_job_is_byte_deterministic_and_reports_schema(tmp_path):
     midi = tmp_path / "renderer.mid"
     font = tmp_path / "clean.sf2"
@@ -92,3 +107,59 @@ def test_render_job_rejects_asset_checksum_mismatch(tmp_path):
         assert "checksum mismatch" in str(error)
     else:
         raise AssertionError("expected checksum rejection")
+
+
+def test_render_job_preserves_canonical_non_rhythm_guitar_identity(tmp_path):
+    midi = tmp_path / "renderer.mid"
+    font = tmp_path / "lead.sf2"
+    _canonical_lead_midi(midi)
+    font.write_bytes(b"pinned test soundfont")
+    library = tmp_path / "library.json"
+    library.write_text(json.dumps({
+        "schema_version": "midi2reaper.library-manifest/v1",
+        "profiles": {"lead": {"kind": "sflt", "soundfont": {"path": "lead.sf2", "sha256": _sha(font)}, "bank": 0, "patch": 29}},
+    }))
+    job = tmp_path / "render-job.json"
+    job.write_text(json.dumps({
+        "schema_version": "midi2reaper.render-job/v1",
+        "job_id": "canonical-lead",
+        "procgen_commit": "test",
+        "renderer_midi": "renderer.mid",
+        "template_id": "midi2reaper/sflt-v1",
+        "library_manifest": "library.json",
+        "part_profiles": {"overdriven-guitar": "lead"},
+    }))
+
+    project = tmp_path / "lead.RPP"
+    assert run(job, project, tmp_path / "result.json") == 0
+    result = json.loads((tmp_path / "result.json").read_text())
+    assert result["built"][0]["parts"][0]["track_name"] == "overdriven-guitar"
+    assert "overdriven-guitar:rhythm" not in project.read_text(encoding="utf-8")
+
+
+def test_render_job_rejects_canonical_name_that_conflicts_with_midi_identity(tmp_path):
+    midi = tmp_path / "renderer.mid"
+    font = tmp_path / "lead.sf2"
+    _canonical_lead_midi(midi, name="distortion-guitar:rhythm")
+    font.write_bytes(b"pinned test soundfont")
+    library = tmp_path / "library.json"
+    library.write_text(json.dumps({
+        "schema_version": "midi2reaper.library-manifest/v1",
+        "profiles": {"lead": {"kind": "sflt", "soundfont": {"path": "lead.sf2", "sha256": _sha(font)}, "bank": 0, "patch": 29}},
+    }))
+    job = tmp_path / "render-job.json"
+    job.write_text(json.dumps({
+        "schema_version": "midi2reaper.render-job/v1",
+        "job_id": "canonical-conflict",
+        "procgen_commit": "test",
+        "renderer_midi": "renderer.mid",
+        "template_id": "midi2reaper/sflt-v1",
+        "library_manifest": "library.json",
+        "part_profiles": {"distortion-guitar:rhythm": "lead"},
+    }))
+
+    assert run(job, tmp_path / "conflict.RPP", tmp_path / "result.json") == 1
+    result = json.loads((tmp_path / "result.json").read_text())
+    assert result["rejected"] == [{
+        "reason": "source track 'distortion-guitar:rhythm' identity does not match its MIDI program/channel"
+    }]
