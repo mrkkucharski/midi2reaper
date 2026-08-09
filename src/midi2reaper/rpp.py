@@ -81,8 +81,10 @@ class RenderPart:
     @property
     def display_name(self) -> str:
         """Track label shown in REAPER: canonical name, source, and any substitution."""
-        label = self.renderer_track_id or self.track_name
-        if self.source_name and self.source_name != label:
+        label = self.track_name
+        if self.renderer_track_id:
+            label += f" | {self.renderer_track_id}"
+        if self.source_name and self.source_name != self.track_name:
             label += f" | {self.source_name}"
         if self.vocal_substitution:
             label += " [vocal→instrument]"

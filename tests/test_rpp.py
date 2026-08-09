@@ -44,7 +44,7 @@ def test_canonical_source_name_is_not_repeated_in_reaper_label() -> None:
 
     assert part.display_name == "acoustic-grand-piano"
     assert alias.display_name == (
-        "renderer-alias/rhythm-guitar-left | distortion-guitar:rhythm"
+        "distortion-guitar:rhythm | renderer-alias/rhythm-guitar-left"
     )
 
 
