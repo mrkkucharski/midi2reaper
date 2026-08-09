@@ -14,10 +14,38 @@ from midi2reaper.rpp import (
     MASTER_VOLUME_GAIN,
     RENDER_CFG_B64,
     RENDER_FMT_LINE,
+    RenderPart,
     midi_events,
     sflt_chunk,
     write_project,
 )
+
+
+def test_canonical_source_name_is_not_repeated_in_reaper_label() -> None:
+    part = RenderPart(
+        track_name="acoustic-grand-piano",
+        source_name="acoustic-grand-piano",
+        notes=[],
+        soundfont_path=Path("/tmp/piano.sf2"),
+        bank=0,
+        patch=0,
+        is_drum=False,
+    )
+    alias = RenderPart(
+        track_name="distortion-guitar:rhythm",
+        source_name="distortion-guitar:rhythm",
+        renderer_track_id="renderer-alias/rhythm-guitar-left",
+        notes=[],
+        soundfont_path=Path("/tmp/guitar.sf2"),
+        bank=0,
+        patch=0,
+        is_drum=False,
+    )
+
+    assert part.display_name == "acoustic-grand-piano"
+    assert alias.display_name == (
+        "renderer-alias/rhythm-guitar-left | distortion-guitar:rhythm"
+    )
 
 
 def split_blocks(lines: list[str]) -> list[bytes]:
