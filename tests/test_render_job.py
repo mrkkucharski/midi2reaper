@@ -43,6 +43,7 @@ def test_render_job_is_byte_deterministic_and_reports_schema(tmp_path):
     midi = tmp_path / "renderer.mid"
     font = tmp_path / "clean.sf2"
     _midi(midi)
+    _midi(tmp_path / "label.mid")
     font.write_bytes(b"pinned test soundfont")
     library = tmp_path / "library.json"
     library.write_text(json.dumps({
@@ -55,6 +56,7 @@ def test_render_job_is_byte_deterministic_and_reports_schema(tmp_path):
         "job_id": "test-job",
         "procgen_commit": "0123456789abcdef",
         "renderer_midi": "renderer.mid",
+        "label_midi": "label.mid",
         "template_id": "midi2reaper/sflt-v1",
         "library_manifest": "library.json",
         "part_profiles": {"electric-guitar-clean:rhythm": "guitar"},
@@ -73,6 +75,9 @@ def test_render_job_is_byte_deterministic_and_reports_schema(tmp_path):
     assert result["version"] == 1
     assert result["status"] == "built"
     assert result["built"][0]["sha256"] == _sha(first)
+    assert result["built"][0]["label_midi"] == str((tmp_path / "label.mid").resolve())
+    assert result["built"][0]["label_midi_sha256"] == _sha(tmp_path / "label.mid")
+    assert result["label_midi"] == str((tmp_path / "label.mid").resolve())
     assert result["built"][0]["renderer_track_aliases"] == [
         {"renderer_track_id": "renderer-alias/guitar-left", "authoritative_symbolic_part": "electric-guitar-clean:rhythm", "pan": -0.7},
         {"renderer_track_id": "renderer-alias/guitar-right", "authoritative_symbolic_part": "electric-guitar-clean:rhythm", "pan": 0.7},
@@ -91,6 +96,7 @@ def test_render_job_is_byte_deterministic_and_reports_schema(tmp_path):
 def test_render_job_rejects_asset_checksum_mismatch(tmp_path):
     font = tmp_path / "font.sf2"
     font.write_bytes(b"changed")
+    _midi(tmp_path / "label.mid")
     library = tmp_path / "library.json"
     library.write_text(json.dumps({
         "schema_version": "midi2reaper.library-manifest/v1",
@@ -99,6 +105,7 @@ def test_render_job_rejects_asset_checksum_mismatch(tmp_path):
     job = tmp_path / "job.json"
     job.write_text(json.dumps({
         "schema_version": "midi2reaper.render-job/v1", "job_id": "x", "procgen_commit": "test", "renderer_midi": "missing.mid",
+        "label_midi": "label.mid",
         "template_id": "midi2reaper/sflt-v1", "library_manifest": "library.json", "part_profiles": {"x": "p"},
     }))
     try:
@@ -107,6 +114,36 @@ def test_render_job_rejects_asset_checksum_mismatch(tmp_path):
         assert "checksum mismatch" in str(error)
     else:
         raise AssertionError("expected checksum rejection")
+
+
+def test_render_job_rejects_missing_label_midi(tmp_path):
+    midi = tmp_path / "renderer.mid"
+    font = tmp_path / "clean.sf2"
+    _midi(midi)
+    font.write_bytes(b"pinned test soundfont")
+    library = tmp_path / "library.json"
+    library.write_text(json.dumps({
+        "schema_version": "midi2reaper.library-manifest/v1",
+        "profiles": {"guitar": {"kind": "sflt", "soundfont": {"path": "clean.sf2", "sha256": _sha(font)}, "bank": 0, "patch": 27}},
+    }))
+    job = tmp_path / "render_job.json"
+    job.write_text(json.dumps({
+        "schema_version": "midi2reaper.render-job/v1",
+        "job_id": "test-job",
+        "procgen_commit": "0123456789abcdef",
+        "renderer_midi": "renderer.mid",
+        "label_midi": "missing-label.mid",
+        "template_id": "midi2reaper/sflt-v1",
+        "library_manifest": "library.json",
+        "part_profiles": {"electric-guitar-clean:rhythm": "guitar"},
+    }))
+
+    try:
+        run(job, tmp_path / "one.RPP", tmp_path / "result.json")
+    except ValueError as error:
+        assert "label_midi does not exist" in str(error)
+    else:
+        raise AssertionError("expected label_midi rejection")
 
 
 def test_render_job_preserves_canonical_non_rhythm_guitar_identity(tmp_path):
@@ -125,6 +162,7 @@ def test_render_job_preserves_canonical_non_rhythm_guitar_identity(tmp_path):
         "job_id": "canonical-lead",
         "procgen_commit": "test",
         "renderer_midi": "renderer.mid",
+        "label_midi": "renderer.mid",
         "template_id": "midi2reaper/sflt-v1",
         "library_manifest": "library.json",
         "part_profiles": {"overdriven-guitar": "lead"},
@@ -153,6 +191,7 @@ def test_render_job_rejects_canonical_name_that_conflicts_with_midi_identity(tmp
         "job_id": "canonical-conflict",
         "procgen_commit": "test",
         "renderer_midi": "renderer.mid",
+        "label_midi": "renderer.mid",
         "template_id": "midi2reaper/sflt-v1",
         "library_manifest": "library.json",
         "part_profiles": {"distortion-guitar:rhythm": "lead"},

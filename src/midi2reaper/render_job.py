@@ -166,6 +166,12 @@ def run(job_path: Path, out: Path, result_path: Path, *, force: bool = False) ->
         raise JobError(f"{job_path}: unsupported template_id {template_id!r}; expected {SFLT_TEMPLATE!r}")
     procgen_commit = _required_string(job, "procgen_commit", job_path)
     midi = (job_path.parent / _required_string(job, "renderer_midi", job_path)).resolve()
+    label_midi = (job_path.parent / _required_string(job, "label_midi", job_path)).resolve()
+    if not label_midi.is_file():
+        # Unlike renderer_midi (whose absence surfaces from inside build()),
+        # nothing else in this function ever opens label_midi, so a missing
+        # file would otherwise ship silently instead of failing the job.
+        raise JobError(f"{job_path}: label_midi does not exist: {label_midi}")
     manifest_path = (job_path.parent / _required_string(job, "library_manifest", job_path)).resolve()
     assignments = job.get("part_profiles")
     if not isinstance(assignments, dict) or not assignments or not all(
@@ -185,6 +191,7 @@ def run(job_path: Path, out: Path, result_path: Path, *, force: bool = False) ->
         "template_id": template_id,
         "procgen_commit": procgen_commit,
         "renderer_midi": str(midi),
+        "label_midi": str(label_midi),
         "midi2reaper_commit": _commit(),
         "status": "rejected",
         "built": [],
@@ -260,7 +267,13 @@ def run(job_path: Path, out: Path, result_path: Path, *, force: bool = False) ->
     seed = hashlib.sha256(json.dumps(job, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     write_project(built.song, render_parts, out, deterministic_seed=seed)
     result["status"] = "built"
-    built_result = {"project": str(out), "sha256": hashlib.sha256(out.read_bytes()).hexdigest(), "parts": rendered_metadata}
+    built_result = {
+        "project": str(out),
+        "sha256": hashlib.sha256(out.read_bytes()).hexdigest(),
+        "label_midi": str(label_midi),
+        "label_midi_sha256": hashlib.sha256(label_midi.read_bytes()).hexdigest(),
+        "parts": rendered_metadata,
+    }
     if routes:
         built_result["renderer_track_aliases"] = aliases
     result["built"].append(built_result)
