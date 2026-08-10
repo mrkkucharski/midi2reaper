@@ -117,7 +117,7 @@ midi2reaper render-job --job render_job.json -o project.RPP --result build_resul
 ```
 
 `render_job.json` has `schema_version` `"midi2reaper.render-job/v1"` and
-contains `job_id`, `procgen_commit`, `renderer_midi`, template ID
+contains `job_id`, `procgen_commit`, `renderer_midi`, `label_midi`, template ID
 `midi2reaper/sflt-v1`, a
 `part_profiles` mapping from canonical part name to profile id, and a
 `library_manifest`. The library manifest has schema version
@@ -125,6 +125,15 @@ contains `job_id`, `procgen_commit`, `renderer_midi`, template ID
 uses a relative asset path and its SHA-256. The adapter verifies every hash,
 never reads the normal soundfont index or `~/.config/midi2reaper/chains`, and
 requires the mapping to cover exactly the parts produced from the MIDI.
+
+`renderer_midi` is what gets rendered: its note starts may be shifted earlier
+than the true onset to compensate for a chain's attack latency, and the whole
+timeline may carry a fixed lead-in. `label_midi` is procgen's uncompensated
+corpus export -- the true onsets. This adapter never reads `label_midi`'s
+contents; it only verifies the file exists and carries its path and SHA-256
+through to the build result, so a downstream corpus finalizer (`reaper2mt3`)
+can source ground-truth note ticks from `label_midi` instead of from the
+RPP's own (compensated) embedded notes. See procgen issue #65.
 
 The result always contains `schema_version`
 `"midi2reaper.build-result/v1"`, numeric `version: 1`, both producing commits,
