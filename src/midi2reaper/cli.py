@@ -89,13 +89,16 @@ def _chains(args: argparse.Namespace) -> int:
         if not library:
             print(f"no chains in {args.chains}")
             return 0
-        print(f"{len(library)} chain(s) in {args.chains}\n")
+        print(f"{len(library)} key(s) in {args.chains}\n")
         for key in library.keys():
-            entry = library.index[key]
-            print(f"  {key:<32} {' -> '.join(entry['plugins'])}")
-            origin = (f"alias of {entry['aliased_from']}" if "aliased_from" in entry
-                      else f"from {entry['source_project']} ({entry['extracted_at']})")
-            print(f"  {'':<32} {origin}")
+            entries = library.index[key]
+            suffix = "" if len(entries) == 1 else f"  ({len(entries)} variants)"
+            print(f"  {key}{suffix}")
+            for entry in entries:
+                print(f"    {' -> '.join(entry['plugins'])}")
+                origin = (f"alias of {entry['aliased_from']}" if "aliased_from" in entry
+                          else f"from {entry['source_project']} ({entry['extracted_at']})")
+                print(f"    {origin}")
         return 0
 
     if args.chain_command == "alias":
@@ -200,6 +203,8 @@ def _build(args: argparse.Namespace) -> int:
             source = (f"chain:{meta['chain']}" if meta["chain"]
                       else f"{meta['soundfont']} (bank {meta['bank']} patch {meta['patch']})")
             print(f"          {part.track_name:<34} {source}")
+            if meta["chain_variant"]:
+                print(f"          {'':<34} variant: {meta['chain_variant']}")
             if part.range_warning:
                 print(f"          WARN  {part.range_warning.detail}")
         for skip in result.skipped:

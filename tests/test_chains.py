@@ -1,3 +1,4 @@
+import json
 import re
 
 import pytest
@@ -140,8 +141,9 @@ def test_library_falls_back_to_family(tmp_path):
     assert library.resolve("electric-bass-pick") is None
 
     library.alias(family_key("bass"), "electric-bass-finger")
-    key, lines = library.resolve("electric-bass-pick")
+    key, lines, entry = library.resolve("electric-bass-pick")
     assert key == "@bass" and lines == ["a"]
+    assert entry["aliased_from"] == "electric-bass-finger"
 
 
 def test_alias_of_missing_chain_is_refused(tmp_path):
@@ -163,3 +165,78 @@ def test_keep_existing_does_not_replace(tmp_path):
     assert library.get("drums") == ["old"]
     assert library.add(Chain(key="drums", lines=["new"], plugins=["B"])) == "updated"
     assert library.get("drums") == ["new"]
+
+
+def test_add_new_source_track_appends_a_variant(tmp_path):
+    """A different `source_track` under the same key is a new variant, not a replace."""
+    library = ChainLibrary(tmp_path)
+    library.add(Chain(key="overdriven-guitar", lines=["a"], plugins=["X"], source_track="overdriven-guitar|v1"))
+    action = library.add(
+        Chain(key="overdriven-guitar", lines=["b"], plugins=["Y"], source_track="overdriven-guitar|v2")
+    )
+    assert action == "added"
+    assert len(library.variants("overdriven-guitar")) == 2
+    # each variant keeps its own file, so neither clobbers the other on disk
+    files = {v["file"] for v in library.variants("overdriven-guitar")}
+    assert len(files) == 2
+    assert library.get("overdriven-guitar", choose=lambda vs: vs[0])[0] == "a"
+    assert library.get("overdriven-guitar", choose=lambda vs: vs[1])[0] == "b"
+
+
+def test_resolve_uses_choose_to_pick_a_variant(tmp_path):
+    library = ChainLibrary(tmp_path)
+    library.add(Chain(key="drums", lines=["a"], plugins=["A"], source_track="drums|v1"))
+    library.add(Chain(key="drums", lines=["b"], plugins=["B"], source_track="drums|v2"))
+
+    assert library.resolve("drums", choose=lambda vs: vs[0])[1] in (["a"], ["b"])
+    first = library.resolve("drums", choose=min_by_file)[1]
+    second = library.resolve("drums", choose=max_by_file)[1]
+    assert {tuple(first), tuple(second)} == {("a",), ("b",)}
+
+
+def test_resolve_reports_which_variant_it_picked(tmp_path):
+    """The picked variant's `source_track` is per-build provenance: which
+    tuning of the instrument a part actually got."""
+    library = ChainLibrary(tmp_path)
+    library.add(Chain(key="drums", lines=["a"], plugins=["A"], source_track="drums|v1"))
+    library.add(Chain(key="drums", lines=["b"], plugins=["B"], source_track="drums|v2"))
+
+    key, lines, entry = library.resolve("drums", choose=min_by_file)
+    assert key == "drums"
+    assert entry["source_track"] == "drums|v1"
+    assert lines == ["a"]
+
+    key, lines, entry = library.resolve("drums", choose=max_by_file)
+    assert entry["source_track"] == "drums|v2"
+    assert lines == ["b"]
+
+
+def min_by_file(variants):
+    return min(variants, key=lambda v: v["file"])
+
+
+def max_by_file(variants):
+    return max(variants, key=lambda v: v["file"])
+
+
+def test_alias_carries_every_variant(tmp_path):
+    library = ChainLibrary(tmp_path)
+    library.add(Chain(key="electric-bass-finger", lines=["a"], plugins=["A"], source_track="v1"))
+    library.add(Chain(key="electric-bass-finger", lines=["b"], plugins=["B"], source_track="v2"))
+
+    assert library.alias(family_key("bass"), "electric-bass-finger")
+    assert len(library.variants(family_key("bass"))) == 2
+    assert all(v.get("aliased_from") == "electric-bass-finger" for v in library.variants(family_key("bass")))
+
+
+def test_old_single_entry_index_migrates_to_list_on_load(tmp_path):
+    (tmp_path / "index.json").write_text(json.dumps({
+        "drums": {"file": "drums.rfxchain", "plugins": ["A"], "source_project": "", "source_track": "", "extracted_at": ""}
+    }))
+    (tmp_path / "drums.rfxchain").write_text("x")
+
+    library = ChainLibrary(tmp_path)
+    assert library.variants("drums") == [
+        {"file": "drums.rfxchain", "plugins": ["A"], "source_project": "", "source_track": "", "extracted_at": ""}
+    ]
+    assert library.get("drums") == ["x"]

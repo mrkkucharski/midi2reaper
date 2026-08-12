@@ -158,7 +158,11 @@ def _merge_into(
         sources = [m.source_name for m in members]
 
         found_chain = chains.resolve(track_name) if chains else None
-        chain_key, chain_lines = found_chain if found_chain else (None, None)
+        chain_key, chain_lines, chain_entry = found_chain if found_chain else (None, None, None)
+        # The picked variant's source_track, e.g. "overdriven-guitar|v2" -- which
+        # tuning of the instrument this part actually got, for a build where the
+        # library holds more than one.
+        chain_variant = chain_entry["source_track"] if chain_entry else None
 
         range_warning = None if is_drum else check_range(track_name, notes, program)
 
@@ -197,6 +201,7 @@ def _merge_into(
                 "role_mixed": best.role.mixed if best.role else False,
                 "vocal_substitution": vocal,
                 "chain": chain_key,
+                "chain_variant": chain_variant,
                 "instrument": "chain:" + chain_key if chain_key else "sflt",
                 "range_warning": range_warning.to_dict() if range_warning else None,
             }

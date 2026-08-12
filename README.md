@@ -187,6 +187,26 @@ more specific, it wins.
 Parts with no matching chain fall back to SFLT and soundfont matching, so the
 library can stay partial indefinitely. `--no-chains` ignores it entirely.
 
+### Variants
+
+A key can hold more than one chain. Tune the same instrument two different
+ways — a brighter DI vs. a darker amp sim, two Kontakt patches — on tracks
+named `<part>|v1`, `<part>|v2`, ... (`overdriven-guitar|v1`,
+`overdriven-guitar:rhythm|v2`), then extract as usual:
+
+```sh
+.venv/bin/midi2reaper chains extract ../reaper/instruments.RPP
+```
+
+The `|` suffix is discarded when computing the part name a chain is keyed
+under — the same mechanism a real tuned song already uses to carry a
+free-text annotation (performer, guitar model) on a harvested track — so
+`overdriven-guitar|v1` and `overdriven-guitar|v2` both land under
+`overdriven-guitar`, as two separate variants rather than one overwriting the
+other. `chains list` shows a `(N variants)` marker for any key with more than
+one. Every `build` picks a random variant per part, so re-running `build` on
+the same source can land a different tuning even though nothing else changed.
+
 Once the projects sound right, hand them to
 [`reaper2mt3`](../reaper2mt3) to render the corpus.
 
@@ -194,29 +214,37 @@ Once the projects sound right, hand them to
 
 The library itself lives outside this repo, at `~/.config/midi2reaper/chains`,
 and accumulates as more songs get tuned — this is a snapshot taken
-2026-08-06, not a tracked file. Regenerate it anytime with
+2026-08-09, not a tracked file. Regenerate it anytime with
 `midi2reaper chains list`.
 
 | Part | Chain | Preset |
 | --- | --- | --- |
 | `acoustic-grand-piano` | Kontakt 8 | — |
-| `acoustic-guitar-nylon`, `:rhythm` | Kontakt 8 | — |
+| `acoustic-guitar-nylon` | Ample Guitar L | `Default` (alias of `:rhythm`) |
+| `acoustic-guitar-nylon:rhythm` | Ample Guitar L | `Default` |
 | `acoustic-guitar-steel`, `:rhythm` | Ample Guitar M II Lite | — |
 | `distortion-guitar` | Ample Guitar LP | `Default_Distortion` |
 | `distortion-guitar:rhythm` | Ample Guitar LP | `Default_Distortion_Rhythm` |
 | `drums` | Kontakt 8 | — |
-| `electric-bass-finger` | midi/midi_transpose → Ample Bass P Lite | — |
-| `electric-bass-pick` | midi/midi_transpose → Ample Bass P Lite | — |
+| `electric-bass-finger` | midi/midi_transpose → Ample Bass P | `Default` |
+| `electric-bass-pick` | midi/midi_transpose → Ample Bass P | `Default_Pick` |
 | `electric-grand-piano` | Kontakt 8 | — |
 | `electric-guitar-clean` | Ample Guitar LP | `Default_Clean` |
 | `electric-guitar-jazz` | Ample Guitar LP | `Default` |
-| `electric-guitar-muted` | Ample Guitar LP | `Default_Clean` |
-| `fretless-bass` | midi/midi_transpose → Ample Bass P Lite | — |
+| `electric-guitar-muted` | Ample Guitar LP | `Default_Clean_Muted` (alias of `:rhythm`) |
+| `electric-guitar-muted:rhythm` | Ample Guitar LP | `Default_Clean_Muted` |
+| `fretless-bass` | midi/midi_transpose → Ample Bass P Lite | `Default` |
 | `overdriven-guitar` | Ample Guitar LP | `Default_Overdrive` |
 
 Family aliases: `@bass` → `electric-bass-finger`, `@guitar` → `overdriven-guitar`.
+**Stale as of this snapshot** — both aliases still point at the chain
+content captured when they were created (2026-08-04/05), before
+`electric-bass-finger` was re-harvested onto the full Ample Bass P. An alias
+copies the chain at creation time; it does not track later updates to its
+target. Re-run `midi2reaper chains alias @bass electric-bass-finger` (and
+`@guitar overdriven-guitar`, if that one's also drifted) to refresh them.
 
-Every electric/distortion/overdrive guitar program now shares the same
+Every electric/distortion/overdrive/muted guitar program now shares the same
 plugin (Ample Guitar LP) but is disambiguated by preset, not just plugin
 choice — `distortion-guitar` and `distortion-guitar:rhythm` in particular
 carry two deliberately different presets (a plain lead tone vs. one tuned for
@@ -225,6 +253,12 @@ Since chain resolution matches on the exact part name first (see "Which
 chain a part gets" above), a track named `distortion-guitar:rhythm` gets the
 rhythm-tuned preset automatically in every project built from here on; no
 further wiring needed for that.
+
+`acoustic-guitar-nylon` and `electric-guitar-muted` take a different path to
+the same end: rather than two independently tuned presets, one Default
+profile (harvested from whichever of the lead/`:rhythm` identities actually
+carried it) is aliased onto the other, so both roles render identically and
+neither can drift out of sync with a re-harvest of just one side.
 
 **External plugin dependencies** — installed and configured by you, this tool
 only references them: Kontakt 8 (Native Instruments), Ample Guitar LP, Ample

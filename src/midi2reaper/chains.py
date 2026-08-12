@@ -12,11 +12,20 @@ they are `NCHAN 2` with no routing — so the block transplants cleanly.
 The library accumulates. Extracting from a project adds the parts that project
 happens to contain and leaves the rest alone, so overdriven guitar can be tuned
 in one song and piano in another.
+
+A key can hold more than one chain — variants of the same instrument, tuned
+differently for sonic variety. They share a key because they share a track
+name up to a `|` suffix (`overdriven-guitar|v1`, `overdriven-guitar|v2`);
+`_key_for` already strips anything from `|` onward, the same mechanism real
+projects use to carry a free-text annotation (performer, guitar model) on a
+harvested track without it becoming part of the key. `resolve` picks among a
+key's variants at random each time it is called.
 """
 
 from __future__ import annotations
 
 import json
+import random
 import re
 import time
 import uuid
@@ -47,11 +56,6 @@ class Chain:
     source_project: str = ""
     source_track: str = ""
     extracted_at: str = ""
-
-    @property
-    def filename(self) -> str:
-        # ':' is legal in HFS+ filenames but displays as '/' in Finder.
-        return self.key.replace(":", "__") + ".rfxchain"
 
 
 def _read_block(lines: list[str], start: int) -> tuple[list[str], int]:
@@ -175,14 +179,23 @@ def family_key(family: str) -> str:
 
 
 class ChainLibrary:
-    """Chains on disk, keyed by canonical part name."""
+    """Chains on disk, keyed by canonical part name.
+
+    Each key maps to a list of variant entries rather than a single one, so
+    the same instrument can hold several differently-tuned chains side by
+    side. An on-disk index written by an older version of this class (one
+    entry per key) loads transparently — each bare entry is wrapped in a
+    one-element list on read, and is written back out in the list form.
+    """
 
     def __init__(self, root: Path):
         self.root = root
-        self.index: dict[str, dict] = {}
+        self.index: dict[str, list[dict]] = {}
         path = root / INDEX_NAME
         if path.exists():
-            self.index = json.loads(path.read_text())
+            raw = json.loads(path.read_text())
+            self.index = {key: entry if isinstance(entry, list) else [entry]
+                          for key, entry in raw.items()}
 
     def __len__(self) -> int:
         return len(self.index)
@@ -190,16 +203,26 @@ class ChainLibrary:
     def keys(self) -> list[str]:
         return sorted(self.index)
 
-    def get(self, key: str) -> list[str] | None:
-        entry = self.index.get(key)
-        if entry is None:
-            return None
+    def variants(self, key: str) -> list[dict]:
+        """Every stored entry for a key, in no particular order."""
+        return list(self.index.get(key, []))
+
+    def _load(self, entry: dict) -> list[str] | None:
         path = self.root / entry["file"]
         if not path.exists():
             return None
         return path.read_text(encoding="utf-8").split("\n")
 
-    def resolve(self, track_name: str) -> tuple[str, list[str]] | None:
+    def get(self, key: str, choose: Callable[[list[dict]], dict] = random.choice) -> list[str] | None:
+        """Chain lines for one variant of `key`, chosen by `choose` (random by default)."""
+        variants = self.index.get(key)
+        if not variants:
+            return None
+        return self._load(choose(variants))
+
+    def resolve(
+        self, track_name: str, choose: Callable[[list[dict]], dict] = random.choice
+    ) -> tuple[str, list[str], dict] | None:
         """Most specific chain for a part, falling back by degrees.
 
         1. the exact part name, `overdriven-guitar:rhythm`
@@ -210,11 +233,21 @@ class ChainLibrary:
            program, and one bass instrument every bass program, which matters
            because GM splits them finely: finger bass and pick bass are
            different programs but the same plugin.
+
+        Whichever key matches first, `choose` picks among that key's stored
+        variants — so a part gets a random tuning of the right instrument,
+        not the same one every time. Returns the matched key, the chain's
+        lines, and the picked variant's index entry (its `source_track` is
+        the per-build provenance of which variant a part actually got).
         """
         for candidate in self.candidates(track_name):
-            lines = self.get(candidate)
+            variants = self.index.get(candidate)
+            if not variants:
+                continue
+            entry = choose(variants)
+            lines = self._load(entry)
             if lines is not None:
-                return candidate, lines
+                return candidate, lines, entry
         return None
 
     @staticmethod
@@ -232,29 +265,52 @@ class ChainLibrary:
         return list(dict.fromkeys(keys))
 
     def alias(self, key: str, source: str) -> bool:
-        """Point `key` at the chain already stored under `source`."""
-        entry = self.index.get(source)
-        if entry is None:
+        """Point `key` at every variant already stored under `source`."""
+        variants = self.index.get(source)
+        if not variants:
             return False
-        self.index[key] = dict(entry, aliased_from=source)
+        self.index[key] = [dict(v, aliased_from=source) for v in variants]
         return True
 
-
     def add(self, chain: Chain, replace: bool = True) -> str:
-        """Store a chain. Returns 'added', 'updated' or 'kept'."""
-        existing = self.index.get(chain.key)
+        """Store a chain. Returns 'added', 'updated' or 'kept'.
+
+        A key can hold several variants at once. Re-extracting from the same
+        `source_track` updates that one variant in place; a `source_track` not
+        already stored under this key — e.g. a new `|v2` — is appended as an
+        additional variant rather than replacing anything.
+        """
+        variants = self.index.setdefault(chain.key, [])
+        existing = next((v for v in variants if v.get("source_track") == chain.source_track), None)
         if existing and not replace:
             return "kept"
+
         self.root.mkdir(parents=True, exist_ok=True)
-        (self.root / chain.filename).write_text("\n".join(chain.lines), encoding="utf-8")
-        self.index[chain.key] = {
-            "file": chain.filename,
+        filename = existing["file"] if existing else self._unique_filename(chain.key)
+        (self.root / filename).write_text("\n".join(chain.lines), encoding="utf-8")
+        entry = {
+            "file": filename,
             "plugins": chain.plugins,
             "source_project": chain.source_project,
             "source_track": chain.source_track,
             "extracted_at": chain.extracted_at,
         }
-        return "updated" if existing else "added"
+        if existing:
+            variants[variants.index(existing)] = entry
+            return "updated"
+        variants.append(entry)
+        return "added"
+
+    def _unique_filename(self, key: str) -> str:
+        # ':' is legal in HFS+ filenames but displays as '/' in Finder.
+        base = key.replace(":", "__")
+        taken = {v["file"] for v in self.index.get(key, [])}
+        if f"{base}.rfxchain" not in taken:
+            return f"{base}.rfxchain"
+        n = 2
+        while f"{base}__{n}.rfxchain" in taken:
+            n += 1
+        return f"{base}__{n}.rfxchain"
 
     def save(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
